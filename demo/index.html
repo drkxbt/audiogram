@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>audiogram</title>
+  <meta name="description" content="Turn a Spaces or podcast recording into a captioned video clip for X, in the browser: pick the moment, time the captions, choose a look, and export an MP4. No upload, no watermark, no dependencies.">
+  <meta name="theme-color" content="#f5f4f0">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="preload" href="fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="../audiogram.css">
+  <link rel="stylesheet" href="demo.css">
+  <script type="module" src="demo.js"></script>
+</head>
+<body>
+  <main class="app">
+    <header class="bar">
+      <span class="brand" translate="no">audiogram</span>
+      <a class="icon-link" href="https://github.com/drkxbt/audiogram" aria-label="audiogram on GitHub" title="GitHub">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 19.5c-4 1.2-4-2-5.5-2.5m11 4.5v-3.4c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.3 4.3 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C6.5 2.8 5.4 3.2 5.4 3.2a4.3 4.3 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.6c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2v3.9"/></svg>
+      </a>
+    </header>
+
+    <section class="intro">
+      <h1>Clips from your Spaces, made in the browser</h1>
+      <p class="lede">Open the recording of a Space, a podcast or a voice note, drag over the minute worth sharing, and it becomes a video for X: your picture and name, bars that move with the voice, and captions that light up word by word. Tap along to time the captions, pick a shape and colours, and export an MP4. The audio never leaves your computer and there is no watermark. Free and MIT licensed, for what audiogram apps charge a monthly plan for.</p>
+      <div class="install"><code>npm install github:drkxbt/audiogram</code></div>
+    </section>
+
+    <section class="work" aria-labelledby="sample-title">
+      <div class="work-head">
+        <div>
+          <h2 id="sample-title">Sample Space</h2>
+          <p class="note">A made-up exchange read by two computer voices, with captions timed from the speech. Open your own recording with the folder button, or drop it on the editor.</p>
+        </div>
+      </div>
+      <div class="frame" data-editor></div>
+    </section>
+
+    <section class="result" aria-labelledby="result-title" data-result hidden>
+      <h2 id="result-title">Your clip</h2>
+      <div class="result-body">
+        <div class="result-info">
+          <span data-result-info></span>
+          <a class="icon-link" data-download download aria-label="Download the clip" title="Download">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/></svg>
+          </a>
+        </div>
+      </div>
+    </section>
+
+    <footer class="foot">
+      <p>MIT licensed. Built by drk.</p>
+      <p>The sample is computer speech, and the penguin art is drk's and not covered by the license.</p>
+    </footer>
+  </main>
+</body>
+</html>

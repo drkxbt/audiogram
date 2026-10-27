@@ -1,0 +1,24 @@
+audiogram
+Copyright 2026 drk
+
+Licensed under the MIT License. See LICENSE.
+
+The demo page ships the Geist and Geist Mono typefaces by Vercel, in collaboration
+with basement.studio, in demo/fonts/. They are licensed under the SIL Open Font
+License 1.1. See demo/fonts/OFL.txt.
+
+The sample in demo/sample is a made-up exchange read by the Microsoft David and
+Microsoft Zira text-to-speech voices that ship with Windows. It is not a recording of
+any real Space or person.
+
+The penguin art in demo/images is drk's personal art and is not covered by the MIT
+License. Use your own pictures if you build on the demo.
+
+The recording tour (demo/tour.html) draws an iPhone and a MacBook running Safari to show
+the demo at their sizes. iPhone, MacBook and Safari are trademarks of Apple Inc.; the
+drawings are approximations made for this demo and imply no connection with Apple.
+X and Spaces are named only to say what the clips are for; X Corp. has no connection
+with this project. Headliner is named only to say what kind of tool this is; it has no
+connection with this project either.
+
+The library itself bundles no fonts, icons, images or sounds.
