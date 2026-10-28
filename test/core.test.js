@@ -263,3 +263,11 @@ test("without a background or a logo nothing extra is drawn", () => {
   new Painter({ ...sceneFor(undefined), speaker: "drk" }).paint(ctx, 1);
   assert.equal(calls.filter((call) => call.op === "drawImage").length, 0);
 });
+
+test("the frame shows the clip's time by the visual and the links along the bottom", () => {
+  const { ctx, calls } = recordingContext(1080, 1080);
+  new Painter({ ...sceneFor(undefined), speaker: "drk", links: ["drk.vc", " x.com/drkxbt ", ""] }).paint(ctx, 1.5);
+  const texts = calls.filter((call) => call.op === "fillText").map((call) => call.text);
+  assert.ok(texts.includes("0:01 / 0:06"), texts.join(" | "));
+  assert.ok(texts.includes("drk.vc  ·  x.com/drkxbt"), texts.join(" | "));
+});

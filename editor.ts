@@ -14,6 +14,7 @@ export interface Labels {
   exported: (seconds: number) => string;
   failed: string;
   timeline: string;
+  playhead: string;
   addPart: string;
   partsFull: string;
   parts: string;
@@ -30,8 +31,9 @@ export interface Labels {
   cover: string;
   background: string;
   backgroundOff: string;
-  logo: string;
-  logoOff: string;
+  links: string;
+  link: (index: number) => string;
+  linkHints: string[];
   music: string;
   musicOff: string;
   musicVolume: string;
@@ -64,8 +66,10 @@ export interface EditorOptions {
   cover?: string | Blob;
   /** A picture behind the whole clip, dimmed under the theme. */
   background?: string | Blob;
-  /** A brand mark, small in the top left corner. */
+  /** A brand mark, small in the top left corner. Set from code; the editor has no key for it. */
   logo?: string | Blob;
+  /** Where to find the speaker, up to three, written small along the bottom of the clip. */
+  links?: string[];
   /** Music under the voice, any audio the browser can decode; it loops and fades in and out. */
   music?: string | Blob;
   /** The music's level, 0 to 1. 0.25 by default, well under the voice. */
@@ -73,7 +77,7 @@ export interface EditorOptions {
   layout?: Layout;
   visual?: Visual;
   theme?: number | Theme;
-  /** The longest clip, in seconds. 140 by default: the longest video most X accounts can post. */
+  /** The longest clip, in seconds. 140 by default: 2:20, the most X lets a free account post; Reels, Shorts, TikTok and LinkedIn all take it. */
   maxLength?: number;
   font?: string;
   labels?: Partial<Labels>;
@@ -102,6 +106,8 @@ export interface Settings {
   /** The music the user opened, or the address it was given; null for none. Its level, 0 to 1. */
   music: Blob | string | null;
   musicVolume: number;
+  /** The links as typed, empty ones left out. */
+  links: string[];
   layout: Layout;
   visual: Visual;
   /** An index into THEMES, or the theme itself when it isn't one of them. */
@@ -127,6 +133,8 @@ export interface Editor {
   /** The recording as the editor decoded it, one channel at 48 kHz, for a page to work on without decoding it again. */
   readonly audio: { samples: Float32Array; sampleRate: number } | null;
   setOverlay(overlay: Overlay | null): void;
+  /** Places for a page's own keys and words: beside the captions heading, a line under it, and before the export key. */
+  readonly slots: { captions: HTMLElement; note: HTMLElement; timeline: HTMLElement };
   destroy(): void;
 }
 
@@ -145,6 +153,7 @@ const DEFAULT_LABELS: Labels = {
   part: (index, from, to) => `Part ${index}, ${from} to ${to}`,
   removePart: (index) => `Remove part ${index}`,
   timeline: "The recording",
+  playhead: "Play from",
   clipStart: "Clip start",
   clipEnd: "Clip end",
   layouts: { square: "Square, 1:1", portrait: "Tall, 4:5", landscape: "Wide, 16:9" },
@@ -156,8 +165,9 @@ const DEFAULT_LABELS: Labels = {
   cover: "Choose a cover picture",
   background: "Choose a background picture",
   backgroundOff: "Remove the background picture",
-  logo: "Add a logo",
-  logoOff: "Remove the logo",
+  links: "Links",
+  link: (index) => `Link ${index}`,
+  linkHints: ["yoursite.com", "x.com/you", "youtube.com/@you"],
   music: "Add background music",
   musicOff: "Remove the background music",
   musicVolume: "Music volume",
@@ -190,7 +200,6 @@ const ICONS: Record<string, string> = {
   pulse: '<circle cx="12" cy="12" r="3.5"/><circle cx="12" cy="12" r="7.5" opacity=".55"/>',
   cover: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="m20.5 16-5-5-8 8.5"/>',
   background: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="m3.5 15.5 4.5-4.5 4 4 3-3 5.5 5.5"/><path d="M15.5 9.5h.01"/>',
-  logo: '<path d="M12 3.5 19.5 7.75v8.5L12 20.5l-7.5-4.25v-8.5Z"/><path d="m9.5 12 1.8 1.8 3.2-3.6"/>',
   music: '<path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',
   tap: '<path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0v4.5a6 6 0 0 1-6 6h-.6a5 5 0 0 1-3.9-1.9L4.8 15a1.5 1.5 0 0 1 2.3-1.9L9 15"/>',
   spread: '<path d="M4 6h16M4 12h10M4 18h13"/>',
@@ -274,10 +283,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let backdrop: HTMLImageElement | null = null;
   let backdropSource: Blob | string | null = options.background ?? null;
   let logo: HTMLImageElement | null = null;
-  let logoSource: Blob | string | null = options.logo ?? null;
+  const logoSource: Blob | string | null = options.logo ?? null;
   let music: { samples: Float32Array; url: string; duration: number } | null = null;
   let musicSource: Blob | string | null = options.music ?? null;
   let musicVolume = Math.min(1, Math.max(0, options.musicVolume ?? 0.25));
+  const links = [0, 1, 2].map((index) => options.links?.[index] ?? "");
   let source: string | Blob | null = null;
   let overlay: Overlay | null = options.overlay ?? null;
   // The clip is the parts, back to back, when there are any; otherwise the selected stretch alone.
@@ -286,6 +296,16 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const spans = (): Array<[number, number]> => (parts.length ? parts : [range]);
   const clipLength = () => (parts.length ? partsLength(parts) : range[1] - range[0]);
   const clipTime = () => (parts.length ? clipTimeAt(parts, playhead) ?? 0 : playhead - range[0]);
+  // The playhead stays inside the clip: on one of the parts, or in the selected stretch when there are none.
+  const intoClip = (time: number) => {
+    let nearest = time;
+    let gap = Infinity;
+    for (const [start, end] of spans()) {
+      const at = Math.min(end, Math.max(start, time));
+      if (Math.abs(at - time) < gap) [nearest, gap] = [at, Math.abs(at - time)];
+    }
+    return nearest;
+  };
   let tapping = false;
   let tapIndex = 0;
   let exporting = false;
@@ -368,7 +388,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   coverInput.type = "file";
   coverInput.accept = "image/*";
   coverInput.tabIndex = -1;
-  // The background picture and the logo each take one key: it opens a picture when there is none and removes it when
+  // The background picture and the music each take one key: it opens a file when there is none and removes it when
   // there is one, pressed while it's on.
   const pictureKey = (className: string, add: string, remove: string, markup: string, apply: (file: Blob | null) => Promise<void>, accept = "image/*") => {
     const button = iconButton(className, add, markup);
@@ -400,12 +420,6 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const backgroundKey = pictureKey("ag-background", labels.background, labels.backgroundOff, ICONS.background, async (file) => {
     backdrop = file ? await loadImage(file) : null;
     backdropSource = file;
-    rebuild();
-    changed();
-  });
-  const logoKey = pictureKey("ag-logo", labels.logo, labels.logoOff, ICONS.logo, async (file) => {
-    logo = file ? await loadImage(file) : null;
-    logoSource = file;
     rebuild();
     changed();
   });
@@ -446,7 +460,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     musicAudio.volume = musicVolume;
     changed();
   });
-  looks.append(layoutChoice, visualChoice, coverButton, coverInput, backgroundKey.button, backgroundKey.input, logoKey.button, logoKey.input, musicKey.button, musicKey.input);
+  looks.append(layoutChoice, visualChoice, coverButton, coverInput, backgroundKey.button, backgroundKey.input, musicKey.button, musicKey.input);
 
   const field = (text: string, value: string, apply: (value: string) => void) => {
     const label = element("label", "ag-field");
@@ -470,6 +484,28 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     field(labels.speaker, speaker, (value) => (speaker = value)),
     field(labels.handle, handle, (value) => (handle = value)),
   );
+  // Three boxes under one name, each a link on its own; the clip shows the filled ones in a row along the bottom.
+  const linkGroup = element("fieldset", "ag-field ag-links");
+  const linkName = element("legend", "ag-field-name");
+  linkName.textContent = labels.links;
+  linkGroup.append(linkName, ...links.map((value, index) => {
+    const input = element("input", "ag-input");
+    input.type = "text";
+    input.inputMode = "url";
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.maxLength = 80;
+    input.value = value;
+    input.placeholder = labels.linkHints[index] ?? "";
+    input.setAttribute("aria-label", labels.link(index + 1));
+    input.addEventListener("input", () => {
+      links[index] = input.value;
+      rebuild();
+      changed();
+    });
+    return input;
+  }));
+  fields.append(linkGroup);
 
   const captionsHead = element("div", "ag-captions-head");
   const captionsTitle = element("h3", "ag-heading");
@@ -483,7 +519,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   importInput.tabIndex = -1;
   const downloadButton = iconButton("", labels.downloadCaptions, ICONS.save);
   const addButton = iconButton("", labels.addCaption, ICONS.add);
-  captionsHead.append(captionsTitle, element("span", "ag-grow"), tapButton, addButton, importButton, downloadButton, importInput);
+  const captionsSlot = element("span", "ag-slot");
+  const noteSlot = element("div", "ag-note");
+  captionsHead.append(captionsTitle, captionsSlot, element("span", "ag-grow"), tapButton, addButton, importButton, downloadButton, importInput);
   const cueList = element("ol", "ag-cues");
   const transcript = element("div", "ag-transcript");
   const transcriptLabel = element("label", "ag-field");
@@ -494,7 +532,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   transcriptLabel.append(transcriptName, transcriptInput);
   const spreadButton = iconButton("", labels.spread, ICONS.spread);
   transcript.append(transcriptLabel, spreadButton);
-  panel.append(looks, musicLevel, themeChoice, fields, captionsHead, cueList, transcript);
+  panel.append(looks, musicLevel, themeChoice, fields, captionsHead, noteSlot, cueList, transcript);
 
   const timeline = element("div", "ag-timeline");
   const openButton = iconButton("ag-open", labels.open, ICONS.open);
@@ -517,13 +555,22 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     handleNode.setAttribute("aria-label", name);
     handleNode.tabIndex = 0;
   }
+  track.append(wave, selection, startHandle, endHandle);
+  // The playhead has a strip of its own above the recording, so moving it never moves the selection.
+  const scrub = element("div", "ag-scrub");
+  scrub.setAttribute("role", "slider");
+  scrub.setAttribute("aria-label", labels.playhead);
+  scrub.tabIndex = 0;
   const playheadLine = element("div", "ag-playhead");
-  track.append(wave, selection, startHandle, endHandle, playheadLine);
+  playheadLine.append(element("span", "ag-knob"));
+  const lane = element("div", "ag-lane");
+  lane.append(scrub, track, playheadLine);
   const exportButton = iconButton("ag-export", labels.export, ICONS.export);
   const meter = element("span", "ag-meter");
   exportButton.append(meter);
   const addPartButton = iconButton("ag-add-part", labels.addPart, ICONS.addPart);
-  timeline.append(openButton, audioInput, playButton, clock, track, addPartButton, exportButton);
+  const timelineSlot = element("span", "ag-slot");
+  timeline.append(openButton, audioInput, playButton, clock, lane, addPartButton, timelineSlot, exportButton);
   const partList = element("ol", "ag-parts");
   partList.setAttribute("aria-label", labels.parts);
 
@@ -558,6 +605,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     backdrop,
     logo,
     music: music ? { samples: music.samples, gain: musicVolume } : null,
+    links,
     captions: paginate(parts.length ? stitchCues(cues, parts) : clip(cues, range[0], range[1]), pageLength(layout)),
     audio: !recording
       ? { samples: new Float32Array(1), sampleRate: 48000, start: 0, end: 0 }
@@ -601,6 +649,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     logo: logoSource,
     music: musicSource,
     musicVolume,
+    links: links.map((link) => link.trim()).filter(Boolean),
     layout,
     visual,
     theme: THEMES.includes(theme) ? THEMES.indexOf(theme) : theme,
@@ -666,6 +715,13 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     startHandle.style.left = `${toX(range[0])}%`;
     endHandle.style.left = `${toX(range[1])}%`;
     playheadLine.style.left = `${toX(playhead)}%`;
+    // The strip lights where the clip is, which is where the playhead can go.
+    const lit = [...spans()].sort((a, b) => a[0] - b[0]).flatMap(([start, end]) => [`transparent ${toX(start)}%`, `var(--ag-accent) ${toX(start)}%`, `var(--ag-accent) ${toX(end)}%`, `transparent ${toX(end)}%`]);
+    scrub.style.setProperty("--ag-lit", `linear-gradient(to right, ${["transparent 0%", ...lit, "transparent 100%"].join(", ")})`);
+    scrub.setAttribute("aria-valuemin", "0");
+    scrub.setAttribute("aria-valuemax", String(Math.round((recording?.duration ?? 0) * 10) / 10));
+    scrub.setAttribute("aria-valuenow", String(Math.round(playhead * 10) / 10));
+    scrub.setAttribute("aria-valuetext", formatTime(playhead));
     const length = range[1] - range[0];
     for (const [handleNode, value] of [[startHandle, range[0]], [endHandle, range[1]]] as const) {
       handleNode.setAttribute("aria-valuemin", "0");
@@ -685,7 +741,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const total = recording?.duration ?? Math.max(start, end);
     start = Math.max(0, Math.min(start, total - MIN_LENGTH));
     end = Math.min(total, Math.max(end, start + MIN_LENGTH));
-    // The longest clip X takes: the edge being dragged pushes the other along rather than going past it.
+    // The longest clip allowed: the edge being dragged pushes the other along rather than going past it.
     if (end - start > maxLength) {
       if (which === "start") end = start + maxLength;
       else start = end - maxLength;
@@ -757,7 +813,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }
 
   function seek(time: number) {
-    playhead = Math.max(0, Math.min(recording?.duration ?? 0, time));
+    playhead = intoClip(Math.max(0, Math.min(recording?.duration ?? 0, time)));
     if (!audio.paused) {
       audio.currentTime = playhead;
       if (music) musicAudio.currentTime = clipTime() % music.duration;
@@ -979,9 +1035,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   partList.addEventListener("pointercancel", endReorder);
   renderParts();
 
-  // Pointer on the recording: drag an edge, drag the clip along, or put the playhead down.
+  // Pointer on the recording: drag an edge, drag the clip along, or drag across the rest to select a new stretch.
 
-  let drag: { kind: "start" | "end" | "move"; pointerId: number; from: number; range: [number, number] } | null = null;
+  let drag: { kind: "start" | "end" | "move" | "new"; pointerId: number; from: number; x: number; range: [number, number] } | null = null;
   const timeAt = (clientX: number) => {
     const box = track.getBoundingClientRect();
     return Math.max(0, Math.min(1, (clientX - box.left) / box.width)) * (recording?.duration ?? 0);
@@ -990,12 +1046,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (!recording || event.button !== 0) return;
     const target = event.target as Element;
     const time = timeAt(event.clientX);
-    const kind = target === startHandle ? "start" : target === endHandle ? "end" : time > range[0] && time < range[1] ? "move" : null;
-    if (!kind) {
-      seek(time);
-      return;
-    }
-    drag = { kind, pointerId: event.pointerId, from: time, range: [...range] };
+    const kind = target === startHandle ? "start" : target === endHandle ? "end" : time > range[0] && time < range[1] ? "move" : "new";
+    drag = { kind, pointerId: event.pointerId, from: time, x: event.clientX, range: [...range] };
     try {
       track.setPointerCapture(event.pointerId);
     } catch {
@@ -1009,7 +1061,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const [start, end] = drag.range;
     if (drag.kind === "start") setRange(start + delta, end, "start");
     else if (drag.kind === "end") setRange(start, end + delta, "end");
-    else {
+    else if (drag.kind === "new") {
+      // A press that doesn't travel leaves the selection as it was.
+      if (Math.abs(event.clientX - drag.x) < 4) return;
+      const at = timeAt(event.clientX);
+      setRange(Math.min(drag.from, at), Math.max(drag.from, at), at < drag.from ? "start" : "end");
+    } else {
       const total = recording!.duration;
       const shift = Math.max(-start, Math.min(total - end, delta));
       setRange(start + shift, end + shift);
@@ -1018,6 +1075,48 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const endDrag = () => (drag = null);
   track.addEventListener("pointerup", endDrag);
   track.addEventListener("pointercancel", endDrag);
+
+  // Pointer on the strip: press anywhere and drag, and the playhead and the picture follow. Playback pauses while it
+  // moves and carries on from where it is let go.
+  let scrubbing: { pointerId: number; resume: boolean } | null = null;
+  scrub.addEventListener("pointerdown", (event) => {
+    if (!recording || event.button !== 0) return;
+    scrubbing = { pointerId: event.pointerId, resume: !audio.paused && !tapping };
+    if (!audio.paused) stop();
+    root.dataset.scrubbing = "";
+    try {
+      scrub.setPointerCapture(event.pointerId);
+    } catch {
+      // A pointer from a script can't be captured; the strip still follows it while it stays over it.
+    }
+    event.preventDefault();
+    scrub.focus({ preventScroll: true });
+    seek(timeAt(event.clientX));
+  });
+  scrub.addEventListener("pointermove", (event) => {
+    if (scrubbing?.pointerId === event.pointerId) seek(timeAt(event.clientX));
+  });
+  const endScrub = () => {
+    if (!scrubbing) return;
+    const { resume } = scrubbing;
+    scrubbing = null;
+    delete root.dataset.scrubbing;
+    if (resume) play();
+  };
+  scrub.addEventListener("pointerup", endScrub);
+  scrub.addEventListener("pointercancel", endScrub);
+  scrub.addEventListener("keydown", (event) => {
+    const step = event.shiftKey ? 1 : 0.1;
+    const list = spans();
+    const to = event.key === "ArrowRight" || event.key === "ArrowUp" ? playhead + step
+      : event.key === "ArrowLeft" || event.key === "ArrowDown" ? playhead - step
+        : event.key === "Home" ? list[0][0]
+          : event.key === "End" ? list[list.length - 1][1]
+            : null;
+    if (to === null) return;
+    event.preventDefault();
+    seek(to);
+  });
 
   for (const [handleNode, which] of [[startHandle, "start"], [endHandle, "end"]] as const) {
     handleNode.addEventListener("keydown", (event) => {
@@ -1138,7 +1237,6 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   if (options.music) void setMusic(options.music).then(() => musicKey.mark(true));
   if (options.logo) void loadImage(options.logo).then((image) => {
     logo = image;
-    logoKey.mark(true);
     rebuild();
   });
   const ready = options.audio ? load(options.audio) : Promise.resolve();
@@ -1187,6 +1285,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       overlay = next;
       rebuild();
     },
+    slots: { captions: captionsSlot, note: noteSlot, timeline: timelineSlot },
     destroy() {
       stop();
       observer.disconnect();

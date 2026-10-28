@@ -53,6 +53,8 @@ export interface Scene {
   logo?: CanvasImageSource | null;
   /** Music for the export's sound only, at the clip's sample rate; the picture follows the voice alone. */
   music?: { samples: Float32Array; gain: number } | null;
+  /** Where to find the speaker, up to three, written small along the bottom. */
+  links?: string[];
 }
 
 /** Where a frame is, for an overlay: seconds into the clip, the canvas's size, and one design pixel at this size. */
@@ -87,7 +89,7 @@ function arrange(layout: Layout, width: number, height: number) {
       header: { ...left, height: left.height * 0.62 },
       visual: { ...right, height: right.height * 0.42 },
       captions: { ...right, y: right.y + right.height * 0.48, height: right.height * 0.44 },
-      progress: { x: pad, y: height - pad * 0.62, width: width - pad * 2, height: 6 },
+      footer: { x: pad, y: height - pad * 0.6, width: width - pad * 2 },
       stacked: false,
     };
   }
@@ -102,9 +104,15 @@ function arrange(layout: Layout, width: number, height: number) {
     header,
     visual,
     captions: { x: pad, y: captionsTop, width: inner, height: height - captionsTop - pad * 1.4 },
-    progress: { x: pad, y: height - pad * 0.7, width: inner, height: 6 },
+    footer: { x: pad, y: height - pad * 0.68, width: inner },
     stacked: true,
   };
+}
+
+/** Whole seconds as m:ss. */
+function clock(seconds: number): string {
+  const whole = Math.floor(seconds);
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, "0")}`;
 }
 
 /** Breaks text into lines no wider than `maxWidth` in the current font. */
@@ -202,19 +210,17 @@ export class Painter {
     }
 
     this.paintHeader(ctx, box.header, box.stacked, font, unit);
-    this.paintVisual(ctx, box.visual, time, unit);
+    this.paintVisual(ctx, box.visual, time, font, unit);
     this.paintCaptions(ctx, box.captions, time, font, unit);
 
-    // How far through the clip, along the bottom.
-    const progress = this.duration ? Math.min(1, Math.max(0, time / this.duration)) : 0;
-    ctx.fillStyle = theme.muted;
-    ctx.globalAlpha = 0.28;
-    roundRect(ctx, box.progress.x, box.progress.y, box.progress.width, box.progress.height, box.progress.height / 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = theme.accent;
-    roundRect(ctx, box.progress.x, box.progress.y, Math.max(box.progress.height, box.progress.width * progress), box.progress.height, box.progress.height / 2);
-    ctx.fill();
+    const links = (scene.links ?? []).map((link) => link.trim()).filter(Boolean).slice(0, 3);
+    if (links.length) {
+      ctx.fillStyle = theme.muted;
+      ctx.font = `500 ${Math.round(28 * unit)}px ${font}`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(links.join("  ·  "), box.footer.x + box.footer.width / 2, box.footer.y, box.footer.width);
+    }
 
     // The logo keeps its shape inside the empty margin above the header, which every shape leaves.
     const logoSize = scene.logo ? sizeOf(scene.logo) : null;
@@ -273,8 +279,18 @@ export class Painter {
     return Math.min(1, rms(samples, center - (window * sampleRate) / 2, center + (window * sampleRate) / 2) * 4.2);
   }
 
-  private paintVisual(ctx: CanvasRenderingContext2D, area: Box, time: number, unit: number) {
+  private paintVisual(ctx: CanvasRenderingContext2D, box: Box, time: number, font: string, unit: number) {
     const { theme, visual, audio } = this.scene;
+    // The time takes a line under the visual: under the moving edge for the wave, centred under bars and pulse.
+    const labelSize = Math.round(26 * unit);
+    const area = { ...box, height: box.height - labelSize * 1.6 };
+    ctx.fillStyle = theme.muted;
+    ctx.font = `500 ${labelSize}px ${font}`;
+    ctx.textAlign = visual === "wave" ? "right" : "center";
+    ctx.textBaseline = "alphabetic";
+    const elapsed = Math.min(this.duration, Math.max(0, time));
+    ctx.fillText(`${clock(elapsed)} / ${clock(Math.round(this.duration))}`, visual === "wave" ? area.x + area.width : area.x + area.width / 2, box.y + box.height - labelSize * 0.2);
+
     const middle = area.y + area.height / 2;
     ctx.fillStyle = theme.accent;
     ctx.strokeStyle = theme.accent;

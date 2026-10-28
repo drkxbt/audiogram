@@ -1,6 +1,6 @@
 # audiogram
 
-Turn the recording of a Space, a podcast or a voice note into a video clip for X, in the browser. Drag over the minute worth sharing, and it becomes a video with your picture and name, bars that move with the voice, and captions that light up word by word. Tap along to time the captions, pick a shape and colours, and export an MP4. Plain TypeScript, no dependencies; the audio never leaves the computer and there is no watermark.
+Turn the recording of a Space, a podcast or a voice note into a video clip for X, TikTok, Reels, Shorts or LinkedIn, in the browser. Drag over the minute worth sharing, and it becomes a video with your picture and name, bars that move with the voice, and captions that light up word by word. Tap along to time the captions, pick a shape and colours, and export an MP4. Plain TypeScript, no dependencies; the audio never leaves the computer and there is no watermark.
 
 Make a clip on [drk.vc](https://drk.vc/repo?id=audiogram#preview), nothing to install.
 
@@ -8,13 +8,13 @@ Make a clip on [drk.vc](https://drk.vc/repo?id=audiogram#preview), nothing to in
 
 Audiogram apps such as Headliner charge a monthly plan for unlimited clips without a watermark. This one is MIT licensed: use it in a product, change it, ship it.
 
-- **Pick the moment.** The whole recording is drawn as a waveform. Drag the clip's edges or slide it along, and play it back with the picture following the sound. Clips stop at 2:20 by default, the longest video most X accounts can post.
+- **Pick the moment.** The whole recording is drawn as a waveform. Drag the clip's edges, slide it along, or drag across the rest of the waveform for a new stretch. The playhead has a strip of its own above it: drag it and the picture follows. Clips stop at 2:20 by default, the most X lets a free account post, and a length Reels, Shorts, TikTok and LinkedIn all take.
 - **Captions, word by word.** The word being said is marked as it is said, said words turn bright and the rest wait in grey. Long lines break into pages that fit the shape of the video.
 - **Timing without a transcript service.** Paste a transcript and it is spread over the clip by how long each line takes to say; then tap the picture as each line starts and the captions snap to your taps. SRT and WebVTT files open and save too.
-- **A look of your own.** Square, 4:5 or 16:9. Bars that follow the voice's pitches, a scrolling wave, or rings that pulse. Five colour themes, your picture, name, handle and a title.
+- **A look of your own.** Square, 4:5 or 16:9. Bars that follow the voice's pitches, a scrolling wave, or rings that pulse. Five colour themes, your picture, name, handle and a title, the clip's time by the visual, and up to three links along the bottom.
 - **An MP4 in seconds.** Where the browser has WebCodecs with H.264 and AAC, as Chrome and Edge do, the video is made faster than it plays, frame by frame, and written to an MP4 by a muxer in this package. Elsewhere it is recorded as it plays.
 - **Private.** Nothing is uploaded: the audio is decoded, drawn and encoded in the page.
-- **Accessible.** Every control is a labelled button, radio group or slider; the clip's edges move with the arrow keys, and the picture describes what is on it.
+- **Accessible.** Every control is a labelled button, radio group or slider; the clip's edges and the playhead move with the arrow keys, and the picture describes what is on it.
 - **Content Security Policy.** Nothing writes a `style` attribute or a `<style>` tag, so it runs under `style-src 'self'`. The audio and any picture you open are played from `blob:` addresses, so a strict policy needs `media-src 'self' blob:` and `img-src 'self' blob:`.
 
 ## Install
@@ -55,7 +55,8 @@ Give the container a height; the editor fills it. Without `onExport`, the finish
 | `range` | the first 30 seconds | The clip to start with, `[start, end]` in seconds. |
 | `title`, `speaker`, `handle`, `cover` | | What the video shows at the top. `cover` is an address or a `Blob`. |
 | `background` | | A picture behind the whole clip, an address or a `Blob`. It is dimmed under the theme's colours so the words stay readable. |
-| `logo` | | A brand mark, an address or a `Blob`, drawn small in the top left corner with its shape kept. |
+| `logo` | | A brand mark, an address or a `Blob`, drawn small in the top left corner with its shape kept. Set it from code; the editor has no key for it. |
+| `links` | `[]` | Up to three links, such as `"drk.vc"`, written small along the bottom of the clip. The editor has a box for each. |
 | `layout` | `"square"` | `"square"`, `"portrait"` (4:5) or `"landscape"` (16:9). |
 | `visual` | `"bars"` | `"bars"`, `"wave"` or `"pulse"`. |
 | `theme` | `0` | An index into `THEMES`, or a theme of your own: `{ background, shade, text, muted, accent, onAccent }`. |
@@ -69,7 +70,7 @@ Give the container a height; the editor fills it. Without `onExport`, the finish
 | `overlay` | | `(ctx, frame) => void`, drawn last on every frame of the preview and the export. `frame` holds `time` and `duration` in seconds, the canvas's `width` and `height`, `unit` (one pixel of a 1080 px design at this size), `theme` and `font`. |
 | `onChange` | | Called with the clip's look (`settings`) after the user changes it, at most once a frame. |
 
-`audiogram()` returns `{ element, captions, range, parts, settings, source, audio, load(audio), setParts(parts), setCaptions(cues), setRange(start, end), setOverlay(overlay), play(), pause(), export(), destroy() }`. `settings` is `{ title, speaker, handle, cover, background, logo, music, musicVolume, layout, visual, theme }`, where `cover`, `background` and `logo` are the pictures the user opened (a `Blob`) or the addresses they were given, and `theme` is an index into `THEMES` or the theme itself, so a page can keep a look and start the next clip with it. `source` is the recording on show, as it was opened (a `Blob`) or given. `audio` is the recording as the editor decoded it, `{ samples, sampleRate }` in one channel at 48 kHz, so a page can work on it without decoding it again.
+`audiogram()` returns `{ element, captions, range, parts, settings, source, audio, slots, load(audio), setParts(parts), setCaptions(cues), setRange(start, end), setOverlay(overlay), play(), pause(), export(), destroy() }`. `settings` is `{ title, speaker, handle, cover, background, logo, music, musicVolume, links, layout, visual, theme }`, where `cover`, `background` and `logo` are the pictures the user opened (a `Blob`) or the addresses they were given, and `theme` is an index into `THEMES` or the theme itself, so a page can keep a look and start the next clip with it. `source` is the recording on show, as it was opened (a `Blob`) or given. `audio` is the recording as the editor decoded it, `{ samples, sampleRate }` in one channel at 48 kHz, so a page can work on it without decoding it again. `slots` holds three empty elements for a page's own controls: `captions` beside the captions heading, `note` on a line under it (hidden while it's empty), and `timeline` before the export key.
 
 The parts work without the editor too. `Painter` draws any frame of a clip onto a canvas, `exportClip(scene)` makes the video, `mux(tracks)` writes an MP4 from encoded H.264 and AAC, and the captions helpers (`parseSubtitles`, `toSRT`, `toVTT`, `spread`, `paginate`, `markStart`, `clip`) take plain arrays.
 
@@ -100,7 +101,7 @@ The editor's colours are custom properties on `.ag`. The video's colours are its
 - **The sound.** The recording is decoded at 48 kHz and mixed to one channel. The waveform is the lowest and highest sample of each slice; the bars are a Hann-windowed FFT of the 40 milliseconds around each frame, gathered into bands spaced the way ears hear pitch, and eased so they rise quickly and fall slowly.
 - **The captions.** Without word timings, words share a line's time by how long each takes to say, with a beat after commas and full stops. Tapping a line's start moves it and the end of the line before, and stretches their words to fit.
 - **The video.** Each frame is drawn to a canvas, turned into a `VideoFrame` and encoded as H.264 with a key frame every two seconds; the clip's sound is encoded as AAC. The MP4 writer puts the index before the media, so the video can start playing before it has all arrived, and interleaves sound and picture by time.
-- **The fallback.** Without WebCodecs, the clip plays once into a canvas stream and a `MediaRecorder`, which makes WebM in most browsers and MP4 in Safari. X doesn't take WebM, so use Chrome, Edge or Safari for clips you mean to post there.
+- **The fallback.** Without WebCodecs, the clip plays once into a canvas stream and a `MediaRecorder`, which makes WebM in most browsers and MP4 in Safari. X and Instagram don't take WebM, so use Chrome, Edge or Safari for clips you mean to post.
 
 ## What it doesn't do yet
 

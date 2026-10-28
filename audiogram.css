@@ -128,6 +128,13 @@
 .ag-heading { margin: 0; font-size: 13px; font-weight: 600; }
 .ag-captions-head { display: flex; align-items: center; gap: 2px; padding-top: 4px; border-top: 1px solid var(--ag-line); }
 .ag-grow { flex: 1; }
+/* A page's own keys sit among the editor's as if they were its own; its line under the captions heading shows only
+   when it has something to say. */
+.ag-slot { display: contents; }
+.ag-note:empty { display: none; }
+.ag-links { margin: 0; padding: 0; border: 0; min-width: 0; gap: 6px; }
+.ag-links .ag-field-name { padding: 0; }
+.ag-input::placeholder { color: var(--ag-muted); opacity: 0.7; }
 .ag-cues { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .ag-cue { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px; }
 .ag-cue[data-active] .ag-time { background: var(--ag-accent); color: var(--ag-accent-ink); }
@@ -208,14 +215,32 @@
 .ag-music-level { display: grid; gap: 6px; }
 .ag-music-level[hidden] { display: none; }
 .ag-slider { width: 100%; margin: 0; accent-color: var(--ag-accent); }
+/* The playhead's strip over the recording, then the recording; the playhead runs down through both. */
+.ag-lane { position: relative; display: grid; flex: 1; gap: 4px; min-width: 0; }
+.ag-scrub {
+  position: relative;
+  height: 18px;
+  border-radius: 6px;
+  cursor: pointer;
+  touch-action: none;
+  outline: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.ag-scrub::before {
+  content: "";
+  position: absolute;
+  inset: 7px 0;
+  border-radius: 2px;
+  background: var(--ag-lit, none), var(--ag-line);
+}
+.ag-scrub:focus-visible { box-shadow: 0 0 0 2px var(--ag-text); }
 .ag-track {
   position: relative;
-  flex: 1;
-  min-width: 0;
   height: 56px;
   border-radius: 8px;
   background: var(--ag-surface);
-  cursor: pointer;
+  cursor: crosshair;
   touch-action: none;
   user-select: none;
   -webkit-user-select: none;
@@ -258,13 +283,31 @@
 .ag-handle:focus-visible { box-shadow: 0 0 0 2px var(--ag-bg), 0 0 0 4px var(--ag-text); }
 .ag-playhead {
   position: absolute;
-  top: -2px;
+  top: 4px;
   bottom: -2px;
   width: 2px;
   margin-left: -1px;
   background: var(--ag-text);
   pointer-events: none;
 }
+/* The knob the strip is dragged by: it grows a little under the pointer and while held. */
+.ag-knob {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--ag-text);
+  box-shadow: 0 0 0 2px var(--ag-bg), 0 1px 3px rgb(0 0 0 / 0.3);
+  translate: -50% -1px;
+  transition: scale 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+@media (hover: hover) {
+  .ag-lane:has(.ag-scrub:hover) .ag-knob { scale: 1.2; }
+}
+.ag[data-scrubbing] .ag-knob { scale: 1.35; }
+.ag[data-scrubbing] .ag-scrub { cursor: grabbing; }
 .ag-export { position: relative; overflow: hidden; background: var(--ag-accent); color: var(--ag-accent-ink); }
 @media (hover: hover) {
   .ag-export:not(:disabled):hover { background: var(--ag-accent); color: var(--ag-accent-ink); filter: brightness(0.95); }
@@ -301,15 +344,18 @@
   .ag-panel { border-left: 0; border-top: 1px solid var(--ag-line); }
   .ag-clock { min-width: 0; margin-right: auto; }
   .ag-timeline { flex-wrap: wrap; }
-  .ag-track { order: 5; flex: 1 0 100%; }
+  .ag-lane { order: 5; flex: 1 0 100%; }
 }
 
 @media (pointer: coarse) {
   .ag-btn { width: 40px; height: 40px; }
   .ag-input { font-size: 16px; }
   .ag-handle { width: 20px; margin-left: -10px; }
+  .ag-scrub { height: 26px; }
+  .ag-scrub::before { inset: 11px 0; }
+  .ag-knob { width: 16px; height: 16px; translate: -50% 1px; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .ag-btn { transition: none; }
+  .ag-btn, .ag-knob { transition: none; }
 }
