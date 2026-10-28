@@ -90,6 +90,8 @@ export interface Editor {
   readonly settings: Settings;
   /** The recording on show, as it was opened or given; null before one is. */
   readonly source: string | Blob | null;
+  /** The recording as the editor decoded it, one channel at 48 kHz, for a page to work on without decoding it again. */
+  readonly audio: { samples: Float32Array; sampleRate: number } | null;
   setOverlay(overlay: Overlay | null): void;
   destroy(): void;
 }
@@ -874,6 +876,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     },
     get source() {
       return source;
+    },
+    get audio() {
+      return recording ? { samples: recording.samples, sampleRate: recording.sampleRate } : null;
     },
     setOverlay(next) {
       overlay = next;
