@@ -54,6 +54,8 @@ Give the container a height; the editor fills it. Without `onExport`, the finish
 | `captions` | `[]` | `{ start, end, text, speaker?, words? }` in seconds from the start of the recording. `words` (`{ text, start }`) is used when it's there. |
 | `range` | the first 30 seconds | The clip to start with, `[start, end]` in seconds. |
 | `title`, `speaker`, `handle`, `cover` | | What the video shows at the top. `cover` is an address or a `Blob`. |
+| `background` | | A picture behind the whole clip, an address or a `Blob`. It is dimmed under the theme's colours so the words stay readable. |
+| `logo` | | A brand mark, an address or a `Blob`, drawn small in the top left corner with its shape kept. |
 | `layout` | `"square"` | `"square"`, `"portrait"` (4:5) or `"landscape"` (16:9). |
 | `visual` | `"bars"` | `"bars"`, `"wave"` or `"pulse"`. |
 | `theme` | `0` | An index into `THEMES`, or a theme of your own: `{ background, shade, text, muted, accent, onAccent }`. |
@@ -63,7 +65,7 @@ Give the container a height; the editor fills it. Without `onExport`, the finish
 | `overlay` | | `(ctx, frame) => void`, drawn last on every frame of the preview and the export. `frame` holds `time` and `duration` in seconds, the canvas's `width` and `height`, `unit` (one pixel of a 1080 px design at this size), `theme` and `font`. |
 | `onChange` | | Called with the clip's look (`settings`) after the user changes it, at most once a frame. |
 
-`audiogram()` returns `{ element, captions, range, settings, source, audio, load(audio), setCaptions(cues), setRange(start, end), setOverlay(overlay), play(), pause(), export(), destroy() }`. `settings` is `{ title, speaker, handle, cover, layout, visual, theme }`, where `cover` is the picture the user opened (a `Blob`) or the address it was given, and `theme` is an index into `THEMES` or the theme itself, so a page can keep a look and start the next clip with it. `source` is the recording on show, as it was opened (a `Blob`) or given. `audio` is the recording as the editor decoded it, `{ samples, sampleRate }` in one channel at 48 kHz, so a page can work on it without decoding it again.
+`audiogram()` returns `{ element, captions, range, settings, source, audio, load(audio), setCaptions(cues), setRange(start, end), setOverlay(overlay), play(), pause(), export(), destroy() }`. `settings` is `{ title, speaker, handle, cover, background, logo, layout, visual, theme }`, where `cover`, `background` and `logo` are the pictures the user opened (a `Blob`) or the addresses they were given, and `theme` is an index into `THEMES` or the theme itself, so a page can keep a look and start the next clip with it. `source` is the recording on show, as it was opened (a `Blob`) or given. `audio` is the recording as the editor decoded it, `{ samples, sampleRate }` in one channel at 48 kHz, so a page can work on it without decoding it again.
 
 The parts work without the editor too. `Painter` draws any frame of a clip onto a canvas, `exportClip(scene)` makes the video, `mux(tracks)` writes an MP4 from encoded H.264 and AAC, and the captions helpers (`parseSubtitles`, `toSRT`, `toVTT`, `spread`, `paginate`, `markStart`, `clip`) take plain arrays.
 

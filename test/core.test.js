@@ -223,3 +223,43 @@ test("an overlay draws last on every frame, told where the clip is and how big",
 test("a scene without an overlay paints as before", () => {
   assert.doesNotThrow(() => new Painter(sceneFor(undefined)).paint(fakeContext(1080, 1080), 0));
 });
+
+// A 2D context that writes down what was drawn, in order, and accepts everything else.
+function recordingContext(width, height) {
+  const calls = [];
+  const any = new Proxy(function () {}, { get: (_, key) => (key === "width" ? 10 : any), apply: () => any, set: () => true });
+  const ctx = new Proxy({}, {
+    get: (_, key) => {
+      if (key === "canvas") return { width, height };
+      if (key === "drawImage") return (image, ...rect) => calls.push({ op: "drawImage", image, rect });
+      if (key === "fillText") return (text) => calls.push({ op: "fillText", text });
+      return any;
+    },
+    set: () => true,
+  });
+  return { ctx, calls };
+}
+
+test("a background picture goes under everything, a logo over the content and under any overlay", () => {
+  const backdrop = { width: 1600, height: 900 };
+  const logo = { width: 400, height: 200 };
+  const { ctx, calls } = recordingContext(1080, 1080);
+  const scene = { ...sceneFor((context) => context.drawImage("overlay")), speaker: "drk", backdrop, logo };
+  new Painter(scene).paint(ctx, 1);
+  const order = calls.map((call) => (call.image === backdrop ? "backdrop" : call.image === logo ? "logo" : call.image === "overlay" ? "overlay" : call.text === "drk" ? "name" : null)).filter(Boolean);
+  assert.deepEqual(order, ["backdrop", "name", "logo", "overlay"]);
+  // The picture covers the frame; the logo sits small in the top left margin, its shape kept.
+  const [bx, by, bw, bh] = calls.find((call) => call.image === backdrop).rect;
+  assert.ok(bx <= 0 && by <= 0 && bx + bw >= 1080 && by + bh >= 1080);
+  const pad = Math.round(1080 * 0.074);
+  const [lx, ly, lw, lh] = calls.find((call) => call.image === logo).rect;
+  close(lx, pad);
+  assert.ok(ly > 0 && ly + lh < pad, `logo ${ly}..${ly + lh} inside the ${pad} px margin`);
+  close(lw / lh, 2, 1e-9);
+});
+
+test("without a background or a logo nothing extra is drawn", () => {
+  const { ctx, calls } = recordingContext(1080, 1080);
+  new Painter({ ...sceneFor(undefined), speaker: "drk" }).paint(ctx, 1);
+  assert.equal(calls.filter((call) => call.op === "drawImage").length, 0);
+});

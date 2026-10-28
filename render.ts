@@ -47,6 +47,10 @@ export interface Scene {
   font?: string;
   /** Drawn over every frame, last, in the preview and the export alike. */
   overlay?: Overlay;
+  /** A picture behind the whole frame, dimmed under the theme's colours so the words stay readable. */
+  backdrop?: CanvasImageSource | null;
+  /** A brand mark, small in the top left margin. */
+  logo?: CanvasImageSource | null;
 }
 
 /** Where a frame is, for an overlay: seconds into the clip, the canvas's size, and one design pixel at this size. */
@@ -134,6 +138,14 @@ function sizeOf(source: CanvasImageSource): { width: number; height: number } {
   return { width, height };
 }
 
+/** Draws a picture over a whole box, filling it the way object-fit: cover does. */
+function drawCover(ctx: CanvasRenderingContext2D, image: CanvasImageSource, width: number, height: number) {
+  const size = sizeOf(image);
+  if (!size.width || !size.height) return;
+  const scale = Math.max(width / size.width, height / size.height);
+  ctx.drawImage(image, (width - size.width * scale) / 2, (height - size.height * scale) / 2, size.width * scale, size.height * scale);
+}
+
 /** Draws a picture into a circle, filling it the way object-fit: cover does. */
 function drawCircle(ctx: CanvasRenderingContext2D, image: CanvasImageSource, cx: number, cy: number, radius: number) {
   const { width, height } = sizeOf(image);
@@ -178,6 +190,14 @@ export class Painter {
     gradient.addColorStop(1, theme.shade);
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
+    if (scene.backdrop) {
+      drawCover(ctx, scene.backdrop, width, height);
+      // The theme's own colours over the picture, so the name, the visual and the captions read on any of them.
+      ctx.globalAlpha = 0.74;
+      ctx.fillStyle = gradient;
+      ctx.fillRect(0, 0, width, height);
+      ctx.globalAlpha = 1;
+    }
 
     this.paintHeader(ctx, box.header, box.stacked, font, unit);
     this.paintVisual(ctx, box.visual, time, unit);
@@ -193,6 +213,15 @@ export class Painter {
     ctx.fillStyle = theme.accent;
     roundRect(ctx, box.progress.x, box.progress.y, Math.max(box.progress.height, box.progress.width * progress), box.progress.height, box.progress.height / 2);
     ctx.fill();
+
+    // The logo keeps its shape inside the empty margin above the header, which every shape leaves.
+    const logoSize = scene.logo ? sizeOf(scene.logo) : null;
+    if (scene.logo && logoSize?.width && logoSize.height) {
+      const scale = Math.min((box.pad * 0.6) / logoSize.height, (width * 0.3) / logoSize.width);
+      const w = logoSize.width * scale;
+      const h = logoSize.height * scale;
+      ctx.drawImage(scene.logo, box.pad, (box.pad - h) / 2, w, h);
+    }
 
     if (scene.overlay) {
       ctx.save();

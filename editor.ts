@@ -22,6 +22,10 @@ export interface Labels {
   speaker: string;
   handle: string;
   cover: string;
+  background: string;
+  backgroundOff: string;
+  logo: string;
+  logoOff: string;
   captions: string;
   tap: string;
   tapNext: (text: string) => string;
@@ -49,6 +53,10 @@ export interface EditorOptions {
   speaker?: string;
   handle?: string;
   cover?: string | Blob;
+  /** A picture behind the whole clip, dimmed under the theme. */
+  background?: string | Blob;
+  /** A brand mark, small in the top left corner. */
+  logo?: string | Blob;
   layout?: Layout;
   visual?: Visual;
   theme?: number | Theme;
@@ -71,6 +79,9 @@ export interface Settings {
   handle: string;
   /** The picture the user opened, or the address it was given; null for none. */
   cover: Blob | string | null;
+  /** The background picture and the logo, the same way; null for none. */
+  background: Blob | string | null;
+  logo: Blob | string | null;
   layout: Layout;
   visual: Visual;
   /** An index into THEMES, or the theme itself when it isn't one of them. */
@@ -115,6 +126,10 @@ const DEFAULT_LABELS: Labels = {
   speaker: "Name",
   handle: "Handle",
   cover: "Choose a cover picture",
+  background: "Choose a background picture",
+  backgroundOff: "Remove the background picture",
+  logo: "Add a logo",
+  logoOff: "Remove the logo",
   captions: "Captions",
   tap: "Time the captions by tapping",
   tapNext: (text) => `Tap the picture when this starts: ${text}`,
@@ -143,6 +158,8 @@ const ICONS: Record<string, string> = {
   wave: '<path d="M3 12c2 0 2-5 4-5s2 10 4 10 2-13 4-13 2 8 4 8h2"/>',
   pulse: '<circle cx="12" cy="12" r="3.5"/><circle cx="12" cy="12" r="7.5" opacity=".55"/>',
   cover: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="m20.5 16-5-5-8 8.5"/>',
+  background: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="m3.5 15.5 4.5-4.5 4 4 3-3 5.5 5.5"/><path d="M15.5 9.5h.01"/>',
+  logo: '<path d="M12 3.5 19.5 7.75v8.5L12 20.5l-7.5-4.25v-8.5Z"/><path d="m9.5 12 1.8 1.8 3.2-3.6"/>',
   tap: '<path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0v4.5a6 6 0 0 1-6 6h-.6a5 5 0 0 1-3.9-1.9L4.8 15a1.5 1.5 0 0 1 2.3-1.9L9 15"/>',
   spread: '<path d="M4 6h16M4 12h10M4 18h13"/>',
   file: '<path d="M6 4.5h8l4 4V19a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 6 19ZM14 4.5V9h4"/><path d="M9 13h6M9 16h4"/>',
@@ -196,8 +213,13 @@ async function decode(source: string | Blob): Promise<{ samples: Float32Array; s
 async function loadImage(source: string | Blob): Promise<HTMLImageElement> {
   const image = new Image();
   image.decoding = "async";
+  // Waits for the load event rather than decode(), which some browsers hold back while the tab is out of sight.
+  const loaded = new Promise<void>((resolve, reject) => {
+    image.onload = () => resolve();
+    image.onerror = () => reject(new Error("The picture could not be opened"));
+  });
   image.src = typeof source === "string" ? source : URL.createObjectURL(source);
-  await image.decode();
+  await loaded;
   return image;
 }
 
@@ -216,6 +238,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let handle = options.handle ?? "";
   let cover: HTMLImageElement | null = null;
   let coverSource: Blob | string | null = options.cover ?? null;
+  let backdrop: HTMLImageElement | null = null;
+  let backdropSource: Blob | string | null = options.background ?? null;
+  let logo: HTMLImageElement | null = null;
+  let logoSource: Blob | string | null = options.logo ?? null;
   let source: string | Blob | null = null;
   let overlay: Overlay | null = options.overlay ?? null;
   let tapping = false;
@@ -300,7 +326,48 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   coverInput.type = "file";
   coverInput.accept = "image/*";
   coverInput.tabIndex = -1;
-  looks.append(layoutChoice, visualChoice, coverButton, coverInput);
+  // The background picture and the logo each take one key: it opens a picture when there is none and removes it when
+  // there is one, pressed while it's on.
+  const pictureKey = (className: string, add: string, remove: string, markup: string, apply: (file: Blob | null) => Promise<void>) => {
+    const button = iconButton(className, add, markup);
+    const input = element("input", "ag-hidden");
+    input.type = "file";
+    input.accept = "image/*";
+    input.tabIndex = -1;
+    const mark = (on: boolean) => {
+      button.setAttribute("aria-pressed", String(on));
+      button.setAttribute("aria-label", on ? remove : add);
+      button.title = on ? remove : add;
+    };
+    button.addEventListener("click", async () => {
+      if (button.getAttribute("aria-pressed") === "true") {
+        await apply(null);
+        mark(false);
+      } else input.click();
+    });
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      input.value = "";
+      if (!file) return;
+      await apply(file);
+      mark(true);
+    });
+    mark(false);
+    return { button, input, mark };
+  };
+  const backgroundKey = pictureKey("ag-background", labels.background, labels.backgroundOff, ICONS.background, async (file) => {
+    backdrop = file ? await loadImage(file) : null;
+    backdropSource = file;
+    rebuild();
+    changed();
+  });
+  const logoKey = pictureKey("ag-logo", labels.logo, labels.logoOff, ICONS.logo, async (file) => {
+    logo = file ? await loadImage(file) : null;
+    logoSource = file;
+    rebuild();
+    changed();
+  });
+  looks.append(layoutChoice, visualChoice, coverButton, coverInput, backgroundKey.button, backgroundKey.input, logoKey.button, logoKey.input);
 
   const field = (text: string, value: string, apply: (value: string) => void) => {
     const label = element("label", "ag-field");
@@ -406,6 +473,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     cover,
     font: options.font,
     overlay: overlay ?? undefined,
+    backdrop,
+    logo,
     captions: paginate(clip(cues, range[0], range[1]), pageLength(layout)),
     audio: recording ? { samples: recording.samples, sampleRate: recording.sampleRate, start: range[0], end: range[1] } : { samples: new Float32Array(1), sampleRate: 48000, start: 0, end: 0 },
   });
@@ -433,6 +502,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     speaker,
     handle,
     cover: coverSource,
+    background: backdropSource,
+    logo: logoSource,
     layout,
     visual,
     theme: THEMES.includes(theme) ? THEMES.indexOf(theme) : theme,
@@ -846,6 +917,16 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   placeTimeline();
   if (options.cover) void loadImage(options.cover).then((image) => {
     cover = image;
+    rebuild();
+  });
+  if (options.background) void loadImage(options.background).then((image) => {
+    backdrop = image;
+    backgroundKey.mark(true);
+    rebuild();
+  });
+  if (options.logo) void loadImage(options.logo).then((image) => {
+    logo = image;
+    logoKey.mark(true);
     rebuild();
   });
   const ready = options.audio ? load(options.audio) : Promise.resolve();
