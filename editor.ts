@@ -1,6 +1,6 @@
 import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, spread, toSRT, type Cue } from "./captions.js";
 import { exportClip, type ExportResult } from "./export.js";
-import { Painter, SIZES, THEMES, type Layout, type Scene, type Theme, type Visual } from "./render.js";
+import { Painter, SIZES, THEMES, type Layout, type Overlay, type Scene, type Theme, type Visual } from "./render.js";
 import { peaks } from "./wave.js";
 
 export interface Labels {
@@ -58,6 +58,23 @@ export interface EditorOptions {
   labels?: Partial<Labels>;
   /** Called with the finished video. Without it, the video downloads. */
   onExport?: (result: ExportResult) => void;
+  /** Drawn over every frame of the preview and the export. */
+  overlay?: Overlay;
+  /** Called after the look changes through the editor, at most once a frame. */
+  onChange?: (settings: Settings) => void;
+}
+
+/** The look of the clip as it stands: what a page would keep to start the next clip the same way. */
+export interface Settings {
+  title: string;
+  speaker: string;
+  handle: string;
+  /** The picture the user opened, or the address it was given; null for none. */
+  cover: Blob | string | null;
+  layout: Layout;
+  visual: Visual;
+  /** An index into THEMES, or the theme itself when it isn't one of them. */
+  theme: number | Theme;
 }
 
 export interface Editor {
@@ -70,6 +87,8 @@ export interface Editor {
   play(): void;
   pause(): void;
   export(): Promise<ExportResult | null>;
+  readonly settings: Settings;
+  setOverlay(overlay: Overlay | null): void;
   destroy(): void;
 }
 
@@ -192,6 +211,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let speaker = options.speaker ?? "";
   let handle = options.handle ?? "";
   let cover: HTMLImageElement | null = null;
+  let coverSource: Blob | string | null = options.cover ?? null;
+  let overlay: Overlay | null = options.overlay ?? null;
   let tapping = false;
   let tapIndex = 0;
   let exporting = false;
@@ -256,14 +277,17 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const layoutChoice = choice("Shape", (["square", "portrait", "landscape"] as Layout[]).map((value) => ({ value, label: labels.layouts[value], markup: ICONS[value] })), layout, (value) => {
     layout = value as Layout;
     rebuild();
+    changed();
   });
   const visualChoice = choice("Visual", (["bars", "wave", "pulse"] as Visual[]).map((value) => ({ value, label: labels.visuals[value], markup: ICONS[value] })), visual, (value) => {
     visual = value as Visual;
     rebuild();
+    changed();
   });
   const themeChoice = choice("Colours", THEMES.map((item, index) => ({ value: String(index), label: labels.theme(item.name), swatch: item })), String(Math.max(0, THEMES.indexOf(theme))), (value) => {
     theme = THEMES[Number(value)];
     rebuild();
+    changed();
   });
   const looks = element("div", "ag-row");
   const coverButton = iconButton("ag-cover", labels.cover, ICONS.cover);
@@ -284,6 +308,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     input.addEventListener("input", () => {
       apply(input.value);
       rebuild();
+      changed();
     });
     label.append(name, input);
     return label;
@@ -375,6 +400,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     handle,
     cover,
     font: options.font,
+    overlay: overlay ?? undefined,
     captions: paginate(clip(cues, range[0], range[1]), pageLength(layout)),
     audio: recording ? { samples: recording.samples, sampleRate: recording.sampleRate, start: range[0], end: range[1] } : { samples: new Float32Array(1), sampleRate: 48000, start: 0, end: 0 },
   });
@@ -395,6 +421,27 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     painter.paint(ctx, playhead - range[0]);
     const index = cueAt(painter.scene.captions, playhead - range[0]);
     preview.setAttribute("aria-label", [title, speaker, index >= 0 ? painter.scene.captions[index].text : ""].filter(Boolean).join(". "));
+  }
+
+  const settings = (): Settings => ({
+    title,
+    speaker,
+    handle,
+    cover: coverSource,
+    layout,
+    visual,
+    theme: THEMES.includes(theme) ? THEMES.indexOf(theme) : theme,
+  });
+
+  // The page hears about a change to the look once a frame, however many inputs moved in it.
+  let changePending = false;
+  function changed() {
+    if (!options.onChange || changePending) return;
+    changePending = true;
+    requestAnimationFrame(() => {
+      changePending = false;
+      options.onChange?.(settings());
+    });
   }
 
   /** Something the picture shows has changed: draw it again from scratch. */
@@ -711,7 +758,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     coverInput.value = "";
     if (!file) return;
     cover = await loadImage(file);
+    coverSource = file;
     rebuild();
+    changed();
   });
   tapButton.addEventListener("click", () => setTapping(!tapping));
   preview.addEventListener("pointerdown", () => tapping && tap());
@@ -772,7 +821,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     event.preventDefault();
     if (file.type.startsWith("image/")) void loadImage(file).then((image) => {
       cover = image;
+      coverSource = file;
       rebuild();
+      changed();
     });
     else if (/\.(srt|vtt)$/i.test(file.name)) void file.text().then((text) => {
       cues = parseSubtitles(text);
@@ -814,6 +865,13 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     play,
     pause: stop,
     export: exportVideo,
+    get settings() {
+      return settings();
+    },
+    setOverlay(next) {
+      overlay = next;
+      rebuild();
+    },
     destroy() {
       stop();
       observer.disconnect();

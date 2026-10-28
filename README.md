@@ -60,8 +60,10 @@ Give the container a height; the editor fills it. Without `onExport`, the finish
 | `maxLength` | `140` | The longest clip, in seconds. |
 | `font` | Geist, then the system font | The video's font, as a canvas font family. |
 | `labels` | English | Every name and message, for other languages. |
+| `overlay` | | `(ctx, frame) => void`, drawn last on every frame of the preview and the export. `frame` holds `time` and `duration` in seconds, the canvas's `width` and `height`, `unit` (one pixel of a 1080 px design at this size), `theme` and `font`. |
+| `onChange` | | Called with the clip's look (`settings`) after the user changes it, at most once a frame. |
 
-`audiogram()` returns `{ element, captions, range, load(audio), setCaptions(cues), setRange(start, end), play(), pause(), export(), destroy() }`.
+`audiogram()` returns `{ element, captions, range, settings, load(audio), setCaptions(cues), setRange(start, end), setOverlay(overlay), play(), pause(), export(), destroy() }`. `settings` is `{ title, speaker, handle, cover, layout, visual, theme }`, where `cover` is the picture the user opened (a `Blob`) or the address it was given, and `theme` is an index into `THEMES` or the theme itself, so a page can keep a look and start the next clip with it.
 
 The parts work without the editor too. `Painter` draws any frame of a clip onto a canvas, `exportClip(scene)` makes the video, `mux(tracks)` writes an MP4 from encoded H.264 and AAC, and the captions helpers (`parseSubtitles`, `toSRT`, `toVTT`, `spread`, `paginate`, `markStart`, `clip`) take plain arrays.
 

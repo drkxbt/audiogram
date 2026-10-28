@@ -45,7 +45,22 @@ export interface Scene {
   /** The recording as one mono channel, and the stretch of it the clip covers, in seconds. */
   audio: { samples: Float32Array; sampleRate: number; start: number; end: number };
   font?: string;
+  /** Drawn over every frame, last, in the preview and the export alike. */
+  overlay?: Overlay;
 }
+
+/** Where a frame is, for an overlay: seconds into the clip, the canvas's size, and one design pixel at this size. */
+export interface OverlayFrame {
+  time: number;
+  duration: number;
+  width: number;
+  height: number;
+  unit: number;
+  theme: Theme;
+  font: string;
+}
+
+export type Overlay = (ctx: CanvasRenderingContext2D, frame: OverlayFrame) => void;
 
 interface Box {
   x: number;
@@ -178,6 +193,12 @@ export class Painter {
     ctx.fillStyle = theme.accent;
     roundRect(ctx, box.progress.x, box.progress.y, Math.max(box.progress.height, box.progress.width * progress), box.progress.height, box.progress.height / 2);
     ctx.fill();
+
+    if (scene.overlay) {
+      ctx.save();
+      scene.overlay(ctx, { time, duration: this.duration, width, height, unit, theme, font });
+      ctx.restore();
+    }
   }
 
   private paintHeader(ctx: CanvasRenderingContext2D, area: Box, stacked: boolean, font: string, unit: number) {

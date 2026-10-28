@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { fft, peaks, rms, spectrum, Smoother } from "../dist/wave.js";
 import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, parseTime, spread, timeWords, toSRT, toVTT } from "../dist/captions.js";
 import { mux } from "../dist/mp4.js";
+import { Painter, THEMES } from "../dist/render.js";
 
 const close = (actual, expected, tolerance = 1e-6, message) => assert.ok(Math.abs(actual - expected) <= tolerance, message ?? `${actual} ≉ ${expected}`);
 
@@ -193,4 +194,32 @@ test("an MP4 with its index first, every sample where the index says", () => {
   assert.deepEqual(inside.subarray(asc + 5, asc + 7), audio.description);
   const hdlr = path(file, traks[1], "mdia", "hdlr");
   assert.equal(String.fromCharCode(...file.subarray(hdlr.body + 8, hdlr.body + 12)), "soun");
+});
+
+// A 2D context that accepts every call and records nothing, so the painter runs outside a browser.
+function fakeContext(width, height) {
+  const any = new Proxy(function () {}, { get: (_, key) => (key === "width" ? 0 : any), apply: () => any, set: () => true });
+  return new Proxy({}, { get: (_, key) => (key === "canvas" ? { width, height } : any), set: () => true });
+}
+
+const sceneFor = (overlay) => ({
+  layout: "square", visual: "bars", theme: THEMES[0], title: "", speaker: "drk", handle: "@drkxbt", cover: null, captions: [],
+  audio: { samples: new Float32Array(48000 * 10), sampleRate: 48000, start: 2, end: 8 }, overlay,
+});
+
+test("an overlay draws last on every frame, told where the clip is and how big", () => {
+  const frames = [];
+  const painter = new Painter(sceneFor((ctx, frame) => frames.push(frame)));
+  painter.paint(fakeContext(540, 540), 1.5);
+  assert.equal(frames.length, 1);
+  assert.equal(frames[0].time, 1.5);
+  assert.equal(frames[0].duration, 6);
+  assert.equal(frames[0].width, 540);
+  assert.equal(frames[0].height, 540);
+  close(frames[0].unit, 0.5);
+  assert.equal(frames[0].theme, THEMES[0]);
+});
+
+test("a scene without an overlay paints as before", () => {
+  assert.doesNotThrow(() => new Painter(sceneFor(undefined)).paint(fakeContext(1080, 1080), 0));
 });
