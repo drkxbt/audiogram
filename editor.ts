@@ -88,6 +88,8 @@ export interface Editor {
   pause(): void;
   export(): Promise<ExportResult | null>;
   readonly settings: Settings;
+  /** The recording on show, as it was opened or given; null before one is. */
+  readonly source: string | Blob | null;
   setOverlay(overlay: Overlay | null): void;
   destroy(): void;
 }
@@ -212,6 +214,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let handle = options.handle ?? "";
   let cover: HTMLImageElement | null = null;
   let coverSource: Blob | string | null = options.cover ?? null;
+  let source: string | Blob | null = null;
   let overlay: Overlay | null = options.overlay ?? null;
   let tapping = false;
   let tapIndex = 0;
@@ -639,13 +642,14 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   // Loading.
 
-  async function load(source: string | Blob) {
+  async function load(from: string | Blob) {
     stop();
     root.dataset.state = "loading";
     announce(labels.loading);
-    const next = await decode(source);
+    const next = await decode(from);
     if (recording) URL.revokeObjectURL(recording.url);
     recording = { ...next, duration: next.samples.length / next.sampleRate };
+    source = from;
     audio.src = recording.url;
     root.dataset.state = "ready";
     live.textContent = "";
@@ -867,6 +871,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     export: exportVideo,
     get settings() {
       return settings();
+    },
+    get source() {
+      return source;
     },
     setOverlay(next) {
       overlay = next;
