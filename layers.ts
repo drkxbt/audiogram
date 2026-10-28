@@ -85,7 +85,7 @@ export function defaultLayers(layout: Layout): Layer[] {
     box("avatar", column.x, column.y, radius * 2, radius * 2),
     box("name", nameX, column.y + radius - 56 * unit, column.x + column.w - nameX, 56 * unit, { size: 46, weight: 650, color: "text", align: "left" }),
     box("handle", nameX, column.y + radius + 12 * unit, column.x + column.w - nameX, 44 * unit, { size: 36, weight: 450, color: "muted", align: "left" }),
-    box("title", column.x, titleTop, column.w, titleSize * unit * 1.12 * titleLines, { size: titleSize, weight: 700, color: "text", align: "left" }),
+    box("title", column.x, titleTop, column.w, titleSize * unit * 1.15 * titleLines + 2 * unit, { size: titleSize, weight: 700, color: "text", align: "left" }),
   ];
   const label = 26 * unit * 1.6;
   if (landscape) {
@@ -189,8 +189,9 @@ export function resizeLayer<T extends Box>(layer: T, handle: Handle, dx: number,
     dw = w * grow;
     dh = h * grow;
   }
-  const nextW = Math.max(least, w + dw);
-  const nextH = Math.max(least, h + dh);
+  // Only a side being pulled is held to a sliver; the other keeps its size, so a thin line stays thin.
+  const nextW = dw ? Math.max(least, w + dw) : w;
+  const nextH = dh ? Math.max(least, h + dh) : h;
   if (west) x += w - nextW;
   if (north) y += h - nextH;
   w = nextW;
@@ -218,11 +219,13 @@ export function resizeTurned<T extends Box & { rotation: number }>(layer: T, han
   return { ...next, x: next.x + (before.x - after.x) / width, y: next.y + (before.y - after.y) / height };
 }
 
-/** A layer turned to face the pointer from its centre, upright when the pointer is straight above; `step` snaps to 15°. */
+/** A layer turned to face the pointer from its centre, upright when the pointer is straight above; `step` snaps to 15°, and it settles on quarter turns. */
 export function rotateLayer<T extends Box & { rotation: number }>(layer: T, x: number, y: number, width: number, height: number, step: boolean): T {
   const cx = (layer.x + layer.w / 2) * width;
   const cy = (layer.y + layer.h / 2) * height;
   let degrees = (Math.atan2(x * width - cx, -(y * height - cy)) * 180) / Math.PI;
   if (step) degrees = Math.round(degrees / 15) * 15;
+  // Upright and each quarter turn hold the layer when it comes within a few degrees, since a finger has no Shift.
+  else if (Math.abs(degrees - Math.round(degrees / 90) * 90) <= 4) degrees = Math.round(degrees / 90) * 90;
   return { ...layer, rotation: ((degrees % 360) + 360) % 360 };
 }

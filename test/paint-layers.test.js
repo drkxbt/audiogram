@@ -95,3 +95,14 @@ test("a text layer's height follows its lines: more words, a narrower box or a b
   // A new line typed counts as a line.
   assert.ok(Math.abs(textHeight(ctx, layer, "a\nb", "Geist", 1080, 1080) - (2 * 40 * 1.15) / 1080) < 1e-9);
 });
+
+test("the classic title has room for two lines on a square, a tall and a story frame, and four on a wide one", () => {
+  const long = "A long title about shipping in public every single week of the year and then some more";
+  for (const [layout, lines] of [["square", 2], ["portrait", 2], ["story", 2], ["landscape", 4]]) {
+    const { ctx, calls } = canvasLog(layout === "landscape" ? 1920 : 1080, layout === "story" ? 1920 : layout === "portrait" ? 1350 : 1080);
+    new Painter(scene({ layout, title: long })).paint(ctx, 1);
+    const titleFont = calls.find((call) => call.op === "fillText" && long.startsWith(call.text))?.font;
+    const painted = calls.filter((call) => call.op === "fillText" && call.font === titleFont && long.includes(call.text));
+    assert.equal(painted.length, lines, `${layout}: ${painted.map((call) => call.text).join(" / ")}`);
+  }
+});

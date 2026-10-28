@@ -86,5 +86,7 @@ export const ICONS = {
   shapeRounded: '<rect x="5" y="5" width="14" height="14" rx="4"/>',
   shapeCircle: '<circle cx="12" cy="12" r="7.5"/>',
   shapeLine: '<path d="M4 12h16"/>',
+  layers: '<path d="m12 4 8 4-8 4-8-4Z"/><path d="m4 12 8 4 8-4M4 16l8 4 8-4"/>',
+  show: '<path d="M3 12s3.5-6 9-6 9 6 9 6-3.5 6-9 6-9-6-9-6Z"/><circle cx="12" cy="12" r="2.5"/>',
   next: '<path d="m9.5 6 6 6-6 6"/>',
 };

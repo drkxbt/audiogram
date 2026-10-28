@@ -287,8 +287,8 @@
 .ag[data-state="empty"] .ag-overlay, .ag[data-tapping] .ag-overlay { pointer-events: none; }
 .ag-overlay:focus-visible { box-shadow: 0 0 0 2px var(--ag-stage), 0 0 0 4px var(--ag-text); border-radius: 6px; }
 .ag-hover, .ag-select { position: absolute; transform-origin: center; pointer-events: none; }
-.ag-hover { box-shadow: 0 0 0 1px rgb(127 127 127 / 0.7); border-radius: 2px; }
-.ag-select { box-shadow: 0 0 0 1.5px var(--ag-accent); border-radius: 2px; }
+.ag-hover { box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45), 0 0 0 2px rgb(255 255 255 / 0.75); border-radius: 2px; }
+.ag-select { box-shadow: 0 0 0 1px rgb(0 0 0 / 0.55), 0 0 0 2.5px var(--ag-accent), 0 0 0 3.5px rgb(255 255 255 / 0.9); border-radius: 2px; }
 .ag-grip, .ag-turn {
   position: absolute;
   width: 12px;
@@ -307,6 +307,11 @@
 .ag-grip-s { left: 50%; top: 100%; cursor: ns-resize; }
 .ag-grip-sw { left: 0; top: 100%; cursor: nesw-resize; }
 .ag-grip-w { left: 0; top: 50%; cursor: ew-resize; }
+/* Each handle is easier to hit than it looks. */
+.ag-grip::before, .ag-turn::before { content: ""; position: absolute; inset: -8px; border-radius: 50%; }
+/* Pictures pull only from their corners; so does anything too small for side handles. */
+.ag-select[data-keep] :is(.ag-grip-n, .ag-grip-s, .ag-grip-e, .ag-grip-w),
+.ag-select[data-small] :is(.ag-grip-n, .ag-grip-s, .ag-grip-e, .ag-grip-w) { display: none; }
 /* Side handles on words are pills, the way they read as "pull to widen". */
 .ag-select[data-words] .ag-grip-e, .ag-select[data-words] .ag-grip-w { width: 6px; height: 18px; margin: -9px 0 0 -3px; border-radius: 3px; }
 .ag-select[data-words] .ag-grip-n, .ag-select[data-words] .ag-grip-s { display: none; }
@@ -349,11 +354,17 @@
   background: var(--ag-bg);
   box-shadow: 0 0 0 1px var(--ag-line), 0 6px 18px -8px rgb(0 0 0 / 0.45);
 }
-.ag-context .ag-key { height: 32px; padding: 0 10px 0 8px; font-size: 12.5px; }
+.ag-context .ag-key { height: 32px; padding: 0 9px 0 7px; gap: 6px; font-size: 12.5px; }
 .ag-context .ag-key svg { width: 16px; height: 16px; }
 .ag-context .ag-btn { width: 32px; height: 32px; }
-.ag-font-key .ag-key-text { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+.ag-font-key .ag-key-text { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+/* One row, always: anything that doesn't fit scrolls sideways inside the bar rather than covering the picture. */
+.ag-context { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.ag-context::-webkit-scrollbar { display: none; }
+.ag-context > * { flex: none; }
 .ag-size { display: inline-flex; align-items: center; gap: 2px; }
+.ag-size-name { padding: 0 4px 0 6px; color: var(--ag-muted); font-size: 12px; }
+.ag-colour-key .ag-dot { width: 16px; height: 16px; }
 .ag-size-input { width: 48px; height: 32px; padding: 0 4px; text-align: center; font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
 .ag-size-input::-webkit-inner-spin-button, .ag-size-input::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
 .ag-glyph { color: var(--ag-text); font: 700 15px/1 Georgia, "Times New Roman", serif; }
@@ -386,7 +397,14 @@
 .ag-custom-colour input { width: 32px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; cursor: pointer; }
 .ag-pop-actions { display: grid; gap: 4px; }
 .ag-pop-actions .ag-key { justify-content: flex-start; height: 32px; font-size: 12.5px; }
-.ag-font-list { display: grid; gap: 1px; width: 240px; max-height: min(360px, 60vh); overflow-y: auto; overscroll-behavior: contain; }
+.ag-font-search { height: 32px; }
+.ag-font-list { display: grid; gap: 1px; width: 240px; max-height: min(340px, 55vh); overflow-y: auto; overscroll-behavior: contain; }
+.ag-font-group { display: grid; gap: 1px; }
+.ag-field-head { display: flex; justify-content: space-between; gap: 8px; }
+.ag-field-value { color: var(--ag-text); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ag-position { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 8px; width: 240px; }
+.ag-position .ag-input { height: 30px; font-variant-numeric: tabular-nums; }
+.ag-position .ag-field:last-child { grid-column: 1 / -1; }
 .ag-font-item { padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--ag-text); font-size: 17px; text-align: left; cursor: pointer; }
 .ag-font-item[aria-selected="true"] { background: var(--ag-surface); box-shadow: inset 0 0 0 1.5px var(--ag-accent); }
 @media (hover: hover) {
@@ -415,6 +433,19 @@
 .ag-upload-add:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
 .ag-upload-forget { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; background: rgb(0 0 0 / 0.55); color: #fff; }
 .ag-upload-forget svg { width: 13px; height: 13px; }
+
+/* Layers: top of the picture first, each a name to select and an eye to show or hide it. */
+.ag-layer-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.ag-layer-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 4px; border-radius: 8px; }
+.ag-layer-row[data-selected] { background: var(--ag-surface); box-shadow: inset 0 0 0 1.5px var(--ag-accent); }
+.ag-layer-pick { overflow: hidden; padding: 8px 10px; border: 0; border-radius: 8px; background: none; color: var(--ag-text); font: inherit; font-size: 13px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.ag-layer-row[data-hidden] .ag-layer-pick { color: var(--ag-muted); text-decoration: line-through; cursor: default; }
+@media (hover: hover) {
+  .ag-layer-pick:not(:disabled):hover { background: var(--ag-surface); }
+}
+.ag-layer-pick:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; }
+.ag-layer-toggle, .ag-layer-toggle[aria-pressed="true"] { width: 32px; height: 32px; padding: 0; background: none; color: var(--ag-muted); }
+.ag-layer-toggle[aria-pressed="false"] { color: var(--ag-text); background: var(--ag-surface); }
 
 /* The recording. */
 
@@ -557,6 +588,9 @@
   .ag-body { display: contents; }
   .ag-header { order: 0; padding: 8px 10px; }
   .ag-stage { order: 1; padding: 60px 12px 12px; }
+  .ag-context { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .ag-context::-webkit-scrollbar { display: none; }
+  .ag-context > * { flex: none; }
   .ag-preview { max-height: 52vh; }
   .ag-timeline { order: 2; padding: 8px 10px 10px; }
   .ag-parts { order: 3; padding: 0 10px 10px; }
@@ -575,6 +609,13 @@
   .ag-pager .ag-btn, .ag-part .ag-part-remove, .ag-cue .ag-remove { width: 40px; height: 40px; }
   .ag-more summary { padding: 10px 0; }
   .ag-map { height: 28px; }
+  .ag-context .ag-key, .ag-context .ag-btn, .ag-context .ag-size-input, .ag-swatch-key, .ag-pop-actions .ag-key, .ag-font-search { height: 40px; }
+  .ag-context .ag-btn, .ag-swatch-key { width: 40px; }
+  .ag-swatch-row { grid-template-columns: repeat(6, 40px); }
+  .ag-grip::before, .ag-turn::before { inset: -14px; }
+  /* A swipe over the picture scrolls the page; only the selected layer takes a drag. */
+  .ag-overlay { touch-action: pan-y pinch-zoom; }
+  .ag-select { pointer-events: auto; touch-action: none; }
   .ag-input { font-size: 16px; }
   .ag-handle { width: 20px; margin-left: -10px; }
   .ag-scrub { height: 26px; }
@@ -587,6 +628,9 @@
   .ag-input:focus, .ag-scrub:focus-visible, .ag-handle:focus-visible, .ag-preview:focus-visible { outline: 2px solid Highlight; }
   .ag-tile[aria-checked="true"], .ag-tab[aria-selected="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
   .ag-selection { outline: 2px solid Highlight; }
+  .ag-select, .ag-hover, .ag-overlay:focus-visible, .ag-glyph[aria-pressed="true"], .ag-font-item[aria-selected="true"], .ag-layer-row[data-selected] { outline: 2px solid Highlight; }
+  .ag-grip, .ag-turn { forced-color-adjust: none; background: Canvas; outline: 2px solid Highlight; }
+  .ag-context, .ag-pop { outline: 1px solid CanvasText; }
 }
 
 @media (prefers-reduced-motion: reduce) {

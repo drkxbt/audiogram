@@ -1,6 +1,7 @@
 /* Free editing on the picture, the way a design tool does it: press a layer to select it, drag it (it snaps to the
-   frame's middle and edges and to other layers), pull a handle to size it, the round handle to turn it, double-click
-   words to type them, and use the bar above the picture for the font, the size, the colour and the rest. */
+   frame's middle and edges and to other layers), pull a handle to size it, the round handle to turn it, press selected
+   words again to type them, and use the bar above the picture for the font, the size, the colour and the rest. With the
+   keyboard, Tab steps through the layers on the picture and Enter types into words. */
 
 import { layerAt, moveLayer, resizeTurned, rotateLayer, snapMove, type Guide, type Handle, type Layer } from "./layers.js";
 import { paintOf, type Theme } from "./render.js";
@@ -11,22 +12,28 @@ export interface FontChoice {
   name: string;
   family: string;
   category: string;
-  files: Array<{ url: string; weight: string; unicodeRange?: string }>;
+  files: Array<{ url: string; weight: string; style?: string; unicodeRange?: string }>;
 }
 
 export interface StageLabels {
   picture: string;
   defaultFont: string;
   font: string;
+  searchFonts: string;
   size: string;
   smaller: string;
   larger: string;
   bold: string;
   italic: string;
+  boldMissing: string;
+  italicMissing: string;
   colour: string;
   highlight: string;
   fill: string;
   align: string;
+  alignNames: { left: string; center: string; right: string };
+  editText: string;
+  replace: string;
   more: string;
   forward: string;
   backward: string;
@@ -35,10 +42,24 @@ export interface StageLabels {
   hide: string;
   opacity: string;
   corners: string;
+  position: string;
+  x: string;
+  y: string;
+  width: string;
+  height: string;
+  rotation: string;
+  straighten: string;
   themeColours: string;
   colours: string;
   custom: string;
-  themeColour: (name: string) => string;
+  themeColour: (name: "text" | "muted" | "accent") => string;
+  paletteNames: string[];
+  options: (layer: string) => string;
+  typing: (layer: string) => string;
+  selected: (layer: string) => string;
+  hidden: (layer: string) => string;
+  deleted: (layer: string) => string;
+  duplicated: (layer: string) => string;
 }
 
 export interface StageHost {
@@ -49,6 +70,10 @@ export interface StageHost {
   /** Puts `next` in place of the layers; `done` ends a gesture, so it is undone as one step. */
   change(next: Layer[], done: boolean): void;
   theme(): Theme;
+  /** The font family the picture uses where a layer names none. */
+  fontFamily(): string;
+  /** The frame's size in design pixels, for the exact position fields. */
+  frameSize(): { width: number; height: number };
   fonts(): FontChoice[];
   loadFont(family: string, sample?: string): Promise<void>;
   /** The words a text layer shows, and a way to change them as they are typed. */
@@ -58,6 +83,13 @@ export interface StageHost {
   setEditing(id: string | null): void;
   /** Whether the picture can be edited now: not while captions are tapped out or a video is made. */
   enabled(): boolean;
+  /** A layer's name for people: "Title", "Captions", "Text: Big news". */
+  layerName(layer: Layer): string;
+  announce(message: string): void;
+  /** Edits a layer whose words live elsewhere (links, captions); returns false when there is nothing to open. */
+  open(layer: Layer): boolean;
+  /** Puts another picture in a picture layer or the profile picture. */
+  replace(layer: Layer): void;
 }
 
 export interface Stage {
@@ -66,10 +98,12 @@ export interface Stage {
   /** Lines the selection and the bar up again after the picture or its layers change. */
   refresh(): void;
   editText(id: string): void;
+  focus(): void;
 }
 
 const TEXT_KINDS = new Set(["name", "handle", "title", "links", "time", "text", "captions"]);
 const TYPED_KINDS = new Set(["name", "handle", "title", "text"]);
+const SINGLE_LINE = new Set(["name", "handle"]);
 const ADDED_KINDS = new Set(["text", "image", "shape"]);
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const PALETTE = ["#ffffff", "#111111", "#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#2ff0b8", "#0a84ff", "#5e5ce6", "#bf5af2", "#ff2d55", "#8e8e93"];
@@ -81,6 +115,10 @@ const ALIGN_ICONS = {
 
 let made = 0;
 const newId = (kind: string) => `${kind}-${Date.now().toString(36)}${(made++).toString(36)}`;
+let pops = 0;
+
+/** The heaviest weight a font's files cover: 900 for a variable 100–900 font, 400 for a single regular file. */
+const heaviest = (font: FontChoice) => Math.max(...font.files.map((file) => Number(file.weight.split(/\s+/).pop()) || 400));
 
 export function createStage(host: StageHost): Stage {
   const { labels } = host;
@@ -103,6 +141,7 @@ export function createStage(host: StageHost): Stage {
   box.append(turn);
   const typing = element("textarea", "ag-type");
   typing.hidden = true;
+  typing.rows = 1;
   typing.spellcheck = true;
   overlay.append(guides, hover, box, typing);
   const toolbar = element("div", "ag-context");
@@ -110,12 +149,16 @@ export function createStage(host: StageHost): Stage {
   toolbar.hidden = true;
   const pop = element("div", "ag-pop");
   pop.hidden = true;
+  pop.setAttribute("role", "dialog");
+  pop.id = `ag-pop-${++pops}`;
   host.stage.append(overlay, toolbar, pop);
 
   let selectedId: string | null = null;
   let editing: string | null = null;
+  let toolbarFor = "";
   const find = (id: string | null) => host.layers().find((layer) => layer.id === id) ?? null;
   const size = () => ({ width: overlay.clientWidth || 1, height: overlay.clientHeight || 1 });
+  const visible = () => host.layers().filter((layer) => !layer.hidden && !layer.locked);
 
   // The overlay sits exactly over the picture, wherever the stage has put it.
   function place() {
@@ -142,7 +185,12 @@ export function createStage(host: StageHost): Stage {
     box.hidden = !layer || layer.hidden === true || !host.enabled() || editing !== null;
     if (layer && !box.hidden) {
       frameOf(box, layer);
+      const { width, height } = size();
       box.toggleAttribute("data-words", TEXT_KINDS.has(layer.kind));
+      // Pictures keep their shape, so only their corners pull.
+      box.toggleAttribute("data-keep", layer.kind === "image" || layer.kind === "avatar");
+      // Too small for side handles: the corners are enough, and easier to hit.
+      box.toggleAttribute("data-small", layer.w * width < 48 || layer.h * height < 48);
     }
     toolbar.hidden = !layer || !host.enabled();
   }
@@ -156,20 +204,20 @@ export function createStage(host: StageHost): Stage {
     }));
   }
 
-  function replace(layer: Layer, done: boolean) {
+  function replaceLayer(layer: Layer, done: boolean) {
     host.change(host.layers().map((item) => (item.id === layer.id ? layer : item)), done);
     draw();
   }
 
   function update(layer: Layer, change: Partial<Layer>) {
-    const next = { ...layer, ...change };
-    replace(next, true);
-    buildToolbar(next);
+    replaceLayer({ ...layer, ...change }, true);
+    buildToolbar(find(layer.id));
   }
 
-  // Pointer: select, move, size and turn.
+  // Pointer: select, move, size and turn. On a touch screen a first touch only selects, so a swipe over the picture
+  // still scrolls the page; the selected layer can then be dragged.
 
-  let gesture: { kind: "move" | "resize" | "rotate"; pointerId: number; x: number; y: number; start: Layer; handle?: Handle; moved: boolean } | null = null;
+  let gesture: { kind: "move" | "resize" | "rotate"; pointerId: number; x: number; y: number; start: Layer; handle?: Handle; moved: boolean; wasSelected: boolean } | null = null;
   const pointAt = (event: PointerEvent | MouseEvent) => {
     const rect = overlay.getBoundingClientRect();
     return { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
@@ -189,10 +237,12 @@ export function createStage(host: StageHost): Stage {
       const point = pointAt(event);
       const { width, height } = size();
       start = layerAt(host.layers(), point.x, point.y, width, height);
+      const already = start !== null && start.id === selectedId;
       select(start?.id ?? null);
+      if (event.pointerType === "touch" && !already) return;
     }
     if (!start) return;
-    gesture = { kind, pointerId: event.pointerId, x: event.clientX, y: event.clientY, start, handle: kind === "resize" ? (handle as Handle) : undefined, moved: false };
+    gesture = { kind, pointerId: event.pointerId, x: event.clientX, y: event.clientY, start, handle: kind === "resize" ? (handle as Handle) : undefined, moved: false, wasSelected: current?.id === start.id };
     try {
       overlay.setPointerCapture(event.pointerId);
     } catch {
@@ -206,7 +256,7 @@ export function createStage(host: StageHost): Stage {
   overlay.addEventListener("pointermove", (event) => {
     if (!gesture || gesture.pointerId !== event.pointerId) {
       // Hovering outlines what a press would pick.
-      if (!host.enabled() || gesture) return;
+      if (!host.enabled() || gesture || event.pointerType === "touch") return;
       const point = pointAt(event);
       const { width, height } = size();
       const under = layerAt(host.layers(), point.x, point.y, width, height);
@@ -224,11 +274,12 @@ export function createStage(host: StageHost): Stage {
     let next: Layer;
     if (gesture.kind === "move") {
       const moved = moveLayer(start, dx / width, dy / height);
-      const others = host.layers().filter((layer) => layer.id !== start.id && !layer.hidden);
+      const others = visible().filter((layer) => layer.id !== start.id);
       // Alt moves freely, without snapping.
       const snapped = event.altKey ? { ...moved, guides: [] } : snapMove(moved, others, width, height, 6);
       showGuides(snapped.guides);
-      next = { ...start, x: snapped.x, y: snapped.y };
+      // A snap may not carry a thin layer off the frame; a tenth of it always stays to grab.
+      next = moveLayer({ ...start, x: snapped.x, y: snapped.y }, 0, 0);
     } else if (gesture.kind === "rotate") {
       const point = pointAt(event);
       next = rotateLayer(start, point.x, point.y, width, height, event.shiftKey);
@@ -239,44 +290,87 @@ export function createStage(host: StageHost): Stage {
       next = resizeTurned(start, gesture.handle!, dx, dy, keep, width, height);
       if (corner && TEXT_KINDS.has(start.kind) && start.size) next = { ...next, size: Math.max(8, Math.round(start.size * (next.w / start.w))) };
     }
-    replace(next, false);
+    replaceLayer(next, false);
   });
 
-  const endGesture = () => {
+  const endGesture = (event: PointerEvent) => {
     if (!gesture) return;
-    const { moved, start } = gesture;
+    const { moved, start, wasSelected, kind } = gesture;
     gesture = null;
     showGuides([]);
     if (moved) {
       host.change(host.layers(), true);
       buildToolbar(find(start.id));
+    } else if (event.type === "pointerup" && kind === "move" && wasSelected && TYPED_KINDS.has(start.kind)) {
+      // Pressing selected words again types into them, as a second tap does in a design tool.
+      editText(start.id);
     }
     draw();
   };
   overlay.addEventListener("pointerup", endGesture);
   overlay.addEventListener("pointercancel", endGesture);
   overlay.addEventListener("pointerleave", () => (hover.hidden = true));
+  // Pressing the grey around the picture lets go.
+  host.stage.addEventListener("pointerdown", (event) => {
+    if (event.target === host.stage) select(null);
+  });
 
   overlay.addEventListener("dblclick", (event) => {
     if (!host.enabled()) return;
     const point = pointAt(event);
     const { width, height } = size();
     const under = layerAt(host.layers(), point.x, point.y, width, height);
-    if (under && TYPED_KINDS.has(under.kind)) editText(under.id);
+    if (under) openLayer(under);
   });
 
-  // Keys on the picture: arrows nudge a pixel (ten with Shift), Delete removes, Ctrl or Cmd with D duplicates, Escape lets go.
+  /** Types into words, or opens the panel where a layer's words or picture come from. */
+  function openLayer(layer: Layer) {
+    if (TYPED_KINDS.has(layer.kind)) editText(layer.id);
+    else if (layer.kind === "image" || layer.kind === "avatar") host.replace(layer);
+    else host.open(layer);
+  }
+
+  // Keys on the picture. Tab steps through the layers and on past the last; arrows nudge a pixel (ten with Shift);
+  // Enter types into words; Delete removes; Ctrl or Cmd with D duplicates; Escape lets go.
+  let nudgeTimer = 0;
   overlay.addEventListener("keydown", (event) => {
     if (event.target === typing || !host.enabled()) return;
     const layer = find(selectedId);
-    if (!layer) return;
+    if (event.key === "Tab" && !event.ctrlKey && !event.altKey && !event.metaKey) {
+      // Topmost first, the way the eye reads a design.
+      const order = visible().reverse();
+      const index = layer ? order.findIndex((item) => item.id === layer.id) : -1;
+      const next = event.shiftKey ? index - 1 : index + 1;
+      // Past either end, Tab carries on out of the picture.
+      if (next < 0 || next >= order.length || (event.shiftKey && index < 0)) {
+        select(null);
+        return;
+      }
+      event.preventDefault();
+      select(order[next].id);
+      return;
+    }
+    if (!layer) {
+      const order = visible();
+      if ((event.key === "Enter" || event.key === "ArrowDown") && order.length) {
+        event.preventDefault();
+        select(order[order.length - 1].id);
+      }
+      return;
+    }
     const { width, height } = size();
     const step = event.shiftKey ? 10 : 1;
     const nudge: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
     if (nudge[event.key]) {
       event.preventDefault();
       const [dx, dy] = nudge[event.key];
-      update(layer, moveLayer(layer, dx / width, dy / height));
+      replaceLayer({ ...layer, ...moveLayer(layer, dx / width, dy / height) }, false);
+      // A run of nudges is one step to undo.
+      clearTimeout(nudgeTimer);
+      nudgeTimer = window.setTimeout(() => {
+        host.change(host.layers(), true);
+        buildToolbar(find(selectedId));
+      }, 400);
     } else if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
       removeLayer(layer);
@@ -284,13 +378,14 @@ export function createStage(host: StageHost): Stage {
     else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
       event.preventDefault();
       duplicate(layer);
-    } else if (event.key === "Enter" && TYPED_KINDS.has(layer.kind)) {
+    } else if (event.key === "Enter") {
       event.preventDefault();
-      editText(layer.id);
+      openLayer(layer);
     }
   });
 
-  // Typing into words, in a box over them in their own font.
+  // Typing into words, in a box over them in their own font. The box is set at 16 px or more and scaled down to the
+  // words' size, so a phone doesn't zoom in when it takes focus.
 
   function editText(id: string) {
     const layer = find(id);
@@ -298,54 +393,85 @@ export function createStage(host: StageHost): Stage {
     select(id);
     editing = id;
     host.setEditing(id);
-    const { width, height } = size();
-    const unit = Math.min(width, height) / 1080;
-    frameOf(typing, layer);
-    typing.style.minHeight = `${layer.h * height}px`;
-    typing.style.height = "auto";
-    typing.style.font = `${layer.italic ? "italic " : ""}${layer.weight ?? (layer.kind === "title" ? 700 : 400)} ${(layer.size ?? 40) * unit}px ${layer.font ? `"${layer.font}", ` : ""}${getComputedStyle(host.stage).fontFamily}`;
-    typing.style.color = paintOf(layer.color, host.theme(), layer.kind === "handle" ? "muted" : "text");
-    typing.style.textAlign = layer.align ?? "left";
+    placeTyping(layer);
+    typing.setAttribute("aria-label", labels.typing(host.layerName(layer)));
     typing.value = host.textOf(layer);
     typing.hidden = false;
-    typing.style.height = `${typing.scrollHeight}px`;
+    fitTyping();
     typing.focus();
     typing.select();
     draw();
   }
 
-  function finishTyping() {
+  function placeTyping(layer: Layer) {
+    const { width, height } = size();
+    const px = (layer.size ?? 40) * (Math.min(width, height) / 1080);
+    const scale = Math.min(1, px / 16);
+    const w = (layer.w * width) / scale;
+    const h = (layer.h * height) / scale;
+    const cx = (layer.x + layer.w / 2) * width;
+    const cy = (layer.y + layer.h / 2) * height;
+    const single = SINGLE_LINE.has(layer.kind);
+    typing.style.left = "0";
+    typing.style.top = "0";
+    typing.style.width = `${w}px`;
+    typing.style.minHeight = `${h}px`;
+    typing.style.transformOrigin = "0 0";
+    typing.style.transform = `translate(${cx}px, ${cy}px) rotate(${layer.rotation}deg) scale(${scale}) translate(${-w / 2}px, ${-h / 2}px)`;
+    typing.style.font = `${layer.italic ? "italic " : ""}${layer.weight ?? (layer.kind === "title" ? 700 : 400)} ${px / scale}px ${layer.font ? `"${layer.font}", ` : ""}${host.fontFamily()}`;
+    typing.style.lineHeight = "1.15";
+    typing.style.whiteSpace = single ? "nowrap" : "pre-wrap";
+    // One line sits in the middle of its box, as it is painted.
+    typing.style.paddingTop = single ? `${Math.max(0, (h - (px / scale) * 1.15) / 2)}px` : "0";
+    typing.style.color = paintOf(layer.color, host.theme(), layer.kind === "handle" ? "muted" : "text");
+    typing.style.textAlign = layer.align ?? "left";
+  }
+  function fitTyping() {
+    typing.style.height = "auto";
+    typing.style.height = `${typing.scrollHeight}px`;
+  }
+
+  function finishTyping(refocus: boolean) {
     if (!editing) return;
     editing = null;
     typing.hidden = true;
     host.setEditing(null);
     host.change(host.layers(), true);
     draw();
-    overlay.focus({ preventScroll: true });
+    if (refocus) overlay.focus({ preventScroll: true });
   }
   typing.addEventListener("input", () => {
     const layer = find(editing);
     if (!layer) return;
     host.setText(layer, typing.value);
-    typing.style.height = "auto";
-    typing.style.height = `${typing.scrollHeight}px`;
+    const now = find(editing);
+    if (now) placeTyping(now);
+    fitTyping();
   });
   typing.addEventListener("keydown", (event) => {
     const layer = find(editing);
     // A name or a handle is one line; Enter is done with it. Escape is done with any.
     if (event.key === "Escape" || (event.key === "Enter" && (!layer || layer.kind !== "text" || event.ctrlKey || event.metaKey))) {
       event.preventDefault();
-      finishTyping();
+      finishTyping(true);
     }
   });
-  typing.addEventListener("blur", finishTyping);
+  // Leaving the box ends the typing, without pulling focus back from where the user went.
+  typing.addEventListener("blur", () => finishTyping(false));
 
   // Changes from the bar and the keys.
 
   function removeLayer(layer: Layer) {
-    if (ADDED_KINDS.has(layer.kind)) host.change(host.layers().filter((item) => item.id !== layer.id), true);
-    else replace({ ...layer, hidden: true }, true);
+    const name = host.layerName(layer);
+    if (ADDED_KINDS.has(layer.kind)) {
+      host.change(host.layers().filter((item) => item.id !== layer.id), true);
+      host.announce(labels.deleted(name));
+    } else {
+      replaceLayer({ ...layer, hidden: true }, true);
+      host.announce(labels.hidden(name));
+    }
     select(null);
+    overlay.focus({ preventScroll: true });
   }
 
   function duplicate(layer: Layer) {
@@ -355,6 +481,7 @@ export function createStage(host: StageHost): Stage {
     const at = list.findIndex((item) => item.id === layer.id);
     host.change([...list.slice(0, at + 1), copy, ...list.slice(at + 1)], true);
     select(copy.id);
+    host.announce(labels.duplicated(host.layerName(layer)));
   }
 
   function reorder(layer: Layer, step: number) {
@@ -367,42 +494,65 @@ export function createStage(host: StageHost): Stage {
     draw();
   }
 
-  // The bar above the picture: what can be changed about the selected layer.
+  // Pop-overs from the bar: one at a time, focused when they open, closed by Escape, by pressing elsewhere, or by
+  // focus leaving them.
 
   let popFor: HTMLElement | null = null;
+  let fontWatch: IntersectionObserver | null = null;
   function closePop() {
+    fontWatch?.disconnect();
+    fontWatch = null;
     pop.hidden = true;
     pop.replaceChildren();
     popFor?.setAttribute("aria-expanded", "false");
     popFor = null;
   }
-  function openPop(anchor: HTMLElement, content: HTMLElement[]) {
+  function openPop(anchor: HTMLElement, name: string, content: HTMLElement[]) {
     if (popFor === anchor) return closePop();
     closePop();
     popFor = anchor;
     anchor.setAttribute("aria-expanded", "true");
+    pop.setAttribute("aria-label", name);
     pop.replaceChildren(...content);
     pop.hidden = false;
     const stage = host.stage.getBoundingClientRect();
     const at = anchor.getBoundingClientRect();
     pop.style.top = `${at.bottom - stage.top + 6}px`;
     pop.style.left = `${Math.max(8, Math.min(stage.width - pop.offsetWidth - 8, at.left - stage.left))}px`;
+    (pop.querySelector<HTMLElement>("[aria-pressed=true], input[type=search], button, input") ?? pop).focus();
   }
+  const anchorKey = () => popFor?.dataset.key;
+  /** Focus back on the bar's control with this key, wherever the bar was rebuilt. */
+  const focusKey = (key: string | undefined) => {
+    if (key) toolbar.querySelector<HTMLElement>(`[data-key="${key}"]`)?.focus();
+  };
   document.addEventListener("pointerdown", (event) => {
     if (!pop.hidden && !pop.contains(event.target as Node) && !(popFor?.contains(event.target as Node) ?? false)) closePop();
   });
   pop.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
-    const anchor = popFor;
+    event.stopPropagation();
+    const key = anchorKey();
     closePop();
-    anchor?.focus();
+    focusKey(key);
+  });
+  pop.addEventListener("focusout", (event) => {
+    const next = event.relatedTarget as Node | null;
+    if (next && !pop.contains(next) && !(popFor?.contains(next) ?? false)) closePop();
+  });
+  toolbar.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    if (!pop.hidden) return closePop();
+    select(null);
+    overlay.focus({ preventScroll: true });
   });
 
-  const swatch = (color: string, label: string, apply: () => void) => {
+  const swatch = (color: string, name: string, pressed: boolean, apply: () => void) => {
     const button = element("button", "ag-swatch-key");
     button.type = "button";
-    button.setAttribute("aria-label", label);
-    button.title = label;
+    button.setAttribute("aria-label", name);
+    button.title = name;
+    button.setAttribute("aria-pressed", String(pressed));
     const dot = element("span", "ag-dot");
     dot.style.background = color;
     button.append(dot);
@@ -412,10 +562,12 @@ export function createStage(host: StageHost): Stage {
 
   function colourPop(anchor: HTMLElement, current: string | undefined, fallback: "text" | "muted" | "accent", apply: (paint: string) => void) {
     const theme = host.theme();
+    const chosen = (current ?? fallback).toLowerCase();
     const pick = (paint: string) => {
+      const key = anchorKey();
       apply(paint);
       closePop();
-      anchor.focus();
+      focusKey(key);
     };
     const heading = (text: string) => {
       const node = element("p", "ag-pop-name");
@@ -423,79 +575,162 @@ export function createStage(host: StageHost): Stage {
       return node;
     };
     const themeRow = element("div", "ag-swatch-row");
-    for (const name of ["text", "muted", "accent"] as const) themeRow.append(swatch(theme[name], labels.themeColour(name), () => pick(name)));
+    for (const name of ["text", "muted", "accent"] as const) themeRow.append(swatch(theme[name], labels.themeColour(name), chosen === name, () => pick(name)));
     const paletteRow = element("div", "ag-swatch-row");
-    for (const color of PALETTE) paletteRow.append(swatch(color, color, () => pick(color)));
+    PALETTE.forEach((color, index) => paletteRow.append(swatch(color, labels.paletteNames[index] ?? color, chosen === color, () => pick(color))));
     const custom = element("label", "ag-custom-colour");
     const input = element("input", "");
     input.type = "color";
-    input.value = /^#[0-9a-f]{6}$/i.test(paintOf(current, theme, fallback)) ? paintOf(current, theme, fallback) : "#ffffff";
+    const resolved = paintOf(current, theme, fallback);
+    input.value = /^#[0-9a-f]{6}$/i.test(resolved) ? resolved : "#ffffff";
     input.addEventListener("change", () => pick(input.value));
     const name = element("span", "");
     name.textContent = labels.custom;
     custom.append(input, name);
-    openPop(anchor, [heading(labels.themeColours), themeRow, heading(labels.colours), paletteRow, custom]);
+    openPop(anchor, anchor.getAttribute("aria-label") ?? labels.colour, [heading(labels.themeColours), themeRow, heading(labels.colours), paletteRow, custom]);
   }
 
   function fontPop(anchor: HTMLElement, layer: Layer) {
+    const search = element("input", "ag-input ag-font-search");
+    search.type = "search";
+    search.placeholder = labels.searchFonts;
+    search.setAttribute("aria-label", labels.searchFonts);
+    search.autocomplete = "off";
     const list = element("div", "ag-font-list");
     list.setAttribute("role", "listbox");
     list.setAttribute("aria-label", labels.font);
     const choose = (family: string | undefined) => {
-      update(layer, { font: family });
-      if (family) void host.loadFont(family, host.textOf(layer)).then(() => host.change(host.layers(), false));
+      const key = anchorKey();
       closePop();
-      anchor.focus();
+      // The font arrives first, so words are measured and saved in it, not in the one standing in for it.
+      const apply = () => {
+        update(find(layer.id)!, { font: family });
+        focusKey(key);
+      };
+      if (family) void host.loadFont(family, host.textOf(layer)).catch(() => {}).then(apply);
+      else apply();
     };
+    const options: HTMLButtonElement[] = [];
     const item = (name: string, family: string | undefined) => {
       const button = element("button", "ag-font-item");
       button.type = "button";
       button.setAttribute("role", "option");
-      button.setAttribute("aria-selected", String(layer.font === family));
+      const on = layer.font === family;
+      button.setAttribute("aria-selected", String(on));
+      button.tabIndex = on ? 0 : -1;
       button.textContent = name;
-      if (family) {
-        button.dataset.family = family;
-        button.style.fontFamily = `"${family}", ${getComputedStyle(host.stage).fontFamily}`;
-      }
+      button.style.fontFamily = family ? `"${family}", ${host.fontFamily()}` : host.fontFamily();
+      if (family) button.dataset.family = family;
       button.addEventListener("click", () => choose(family));
+      options.push(button);
       return button;
     };
     list.append(item(labels.defaultFont, undefined));
     const groups = new Map<string, FontChoice[]>();
     for (const font of host.fonts()) groups.set(font.category, [...(groups.get(font.category) ?? []), font]);
+    let group = 0;
     for (const [category, fonts] of groups) {
+      const wrap = element("div", "ag-font-group");
+      wrap.setAttribute("role", "group");
       const name = element("p", "ag-pop-name");
+      name.id = `${pop.id}-group-${group++}`;
       name.textContent = category;
-      list.append(name, ...fonts.map((font) => item(font.name, font.family)));
+      wrap.setAttribute("aria-labelledby", name.id);
+      wrap.append(name, ...fonts.map((font) => item(font.name, font.family)));
+      list.append(wrap);
     }
-    openPop(anchor, [list]);
+    // Arrows move through the fonts on show, Home and End to either end.
+    list.addEventListener("keydown", (event) => {
+      const shown = options.filter((option) => !option.hidden && !(option.parentElement as HTMLElement).hidden);
+      const at = shown.indexOf(document.activeElement as HTMLButtonElement);
+      const to = event.key === "ArrowDown" ? at + 1 : event.key === "ArrowUp" ? at - 1 : event.key === "Home" ? 0 : event.key === "End" ? shown.length - 1 : null;
+      if (to === null) return;
+      event.preventDefault();
+      if (to < 0) return search.focus();
+      shown[Math.min(shown.length - 1, to)]?.focus();
+    });
+    search.addEventListener("input", () => {
+      const query = search.value.trim().toLowerCase();
+      for (const option of options) option.hidden = Boolean(query) && !option.textContent!.toLowerCase().includes(query);
+      list.querySelectorAll<HTMLElement>(".ag-font-group").forEach((wrap) => (wrap.hidden = ![...wrap.querySelectorAll<HTMLElement>(".ag-font-item")].some((option) => !option.hidden)));
+    });
+    search.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowDown" && event.key !== "Enter") return;
+      event.preventDefault();
+      const first = options.find((option) => !option.hidden && !(option.parentElement as HTMLElement).hidden);
+      if (event.key === "Enter") first?.click();
+      else first?.focus();
+    });
+    openPop(anchor, labels.font, [search, list]);
+    search.focus();
     // Each font's name shows in that font once it scrolls into view.
-    const seen = new IntersectionObserver((entries) => {
+    const watch = new IntersectionObserver((entries) => {
       for (const entry of entries) {
         const family = (entry.target as HTMLElement).dataset.family;
         if (entry.isIntersecting && family) {
-          seen.unobserve(entry.target);
+          watch.unobserve(entry.target);
           void host.loadFont(family, (entry.target as HTMLElement).textContent ?? "").catch(() => {});
         }
       }
     }, { root: list });
-    list.querySelectorAll<HTMLElement>("[data-family]").forEach((node) => seen.observe(node));
-    (list.querySelector("[aria-selected=true]") as HTMLElement | null)?.scrollIntoView({ block: "nearest" });
-    (list.querySelector("[aria-selected=true]") as HTMLElement | null)?.focus();
+    fontWatch = watch;
+    list.querySelectorAll<HTMLElement>("[data-family]").forEach((node) => watch.observe(node));
+    list.querySelector<HTMLElement>("[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
   }
 
   function slider(name: string, value: number, apply: (value: number) => void) {
     const label = element("label", "ag-field");
+    const head = element("span", "ag-field-head");
     const text = element("span", "ag-field-name");
     text.textContent = name;
+    const shown = element("output", "ag-field-value");
+    head.append(text, shown);
     const input = element("input", "ag-slider");
     input.type = "range";
     input.min = "0";
     input.max = "100";
+    const show = () => {
+      shown.textContent = `${input.value}%`;
+      input.setAttribute("aria-valuetext", `${input.value}%`);
+    };
     input.value = String(Math.round(value * 100));
-    input.addEventListener("input", () => apply(Number(input.value) / 100));
-    label.append(text, input);
+    show();
+    input.addEventListener("input", () => {
+      show();
+      apply(Number(input.value) / 100);
+    });
+    // A slider's drag is one step to undo, ended when it is let go.
+    input.addEventListener("change", () => host.change(host.layers(), true));
+    label.append(head, input);
     return label;
+  }
+
+  /** Exact place, size and turn, in the frame's own pixels, for keyboards and steady hands. */
+  function positionFields(layer: Layer) {
+    const { width, height } = host.frameSize();
+    const grid = element("div", "ag-position");
+    const field = (name: string, value: number, apply: (value: number) => Partial<Layer>) => {
+      const label = element("label", "ag-field");
+      const text = element("span", "ag-field-name");
+      text.textContent = name;
+      const input = element("input", "ag-input");
+      input.type = "number";
+      input.value = String(Math.round(value));
+      input.addEventListener("change", () => {
+        const number = Number(input.value);
+        if (Number.isFinite(number)) update(find(layer.id)!, apply(number));
+      });
+      label.append(text, input);
+      return label;
+    };
+    grid.append(
+      field(labels.x, layer.x * width, (value) => ({ x: value / width })),
+      field(labels.y, layer.y * height, (value) => ({ y: value / height })),
+      field(labels.width, layer.w * width, (value) => ({ w: Math.max(4, value) / width })),
+      field(labels.height, layer.h * height, (value) => ({ h: Math.max(4, value) / height })),
+      field(labels.rotation, layer.rotation, (value) => ({ rotation: ((value % 360) + 360) % 360 })),
+    );
+    return grid;
   }
 
   function morePop(anchor: HTMLElement, layer: Layer) {
@@ -508,32 +743,61 @@ export function createStage(host: StageHost): Stage {
       });
       return button;
     };
-    actions.append(act(labels.forward, ICONS.forward, () => reorder(layer, 1)), act(labels.backward, ICONS.backward, () => reorder(layer, -1)));
-    if (ADDED_KINDS.has(layer.kind)) actions.append(act(labels.duplicate, ICONS.duplicate, () => duplicate(layer)));
-    const content: HTMLElement[] = [actions, slider(labels.opacity, layer.opacity ?? 1, (value) => replace({ ...find(layer.id)!, opacity: value }, false))];
+    actions.append(act(labels.forward, ICONS.forward, () => reorder(find(layer.id)!, 1)), act(labels.backward, ICONS.backward, () => reorder(find(layer.id)!, -1)));
+    if (ADDED_KINDS.has(layer.kind)) actions.append(act(labels.duplicate, ICONS.duplicate, () => duplicate(find(layer.id)!)));
+    if (layer.rotation) actions.append(act(labels.straighten, ICONS.reset, () => update(find(layer.id)!, { rotation: 0 })));
+    const content: HTMLElement[] = [actions, slider(labels.opacity, layer.opacity ?? 1, (value) => replaceLayer({ ...find(layer.id)!, opacity: value }, false))];
     if (layer.kind === "image" || (layer.kind === "shape" && layer.shape !== "ellipse")) {
-      content.push(slider(labels.corners, (layer.radius ?? 0) * 2, (value) => replace({ ...find(layer.id)!, radius: value / 2 }, false)));
+      content.push(slider(labels.corners, (layer.radius ?? 0) * 2, (value) => replaceLayer({ ...find(layer.id)!, radius: value / 2 }, false)));
     }
-    openPop(anchor, content);
-    // A slider's drag is one step to undo, ended when it is let go.
-    pop.querySelectorAll("input[type=range]").forEach((input) => input.addEventListener("change", () => host.change(host.layers(), true)));
+    const heading = element("p", "ag-pop-name");
+    heading.textContent = labels.position;
+    content.push(heading, positionFields(layer));
+    openPop(anchor, labels.more, content);
+  }
+
+  /** A key on the bar with a swatch for its icon and its name beside it. */
+  function colourKey(key: string, name: string, color: string, open: (anchor: HTMLButtonElement) => void) {
+    const button = keyButton("ag-colour-key", name, "");
+    button.querySelector("svg")?.remove();
+    const dot = element("span", "ag-dot");
+    dot.style.background = color;
+    button.prepend(dot);
+    button.dataset.key = key;
+    button.setAttribute("aria-haspopup", "dialog");
+    button.setAttribute("aria-expanded", "false");
+    button.setAttribute("aria-controls", pop.id);
+    button.addEventListener("click", () => open(button));
+    return button;
   }
 
   function buildToolbar(layer: Layer | null) {
+    const active = toolbar.contains(document.activeElement) ? (document.activeElement as HTMLElement).closest<HTMLElement>("[data-key]")?.dataset.key : undefined;
     closePop();
     toolbar.replaceChildren();
+    toolbarFor = layer ? JSON.stringify(layer) : "";
     if (!layer) return;
     const theme = host.theme();
+    toolbar.setAttribute("aria-label", labels.options(host.layerName(layer)));
+    const keyed = <T extends HTMLElement>(node: T, key: string) => {
+      node.dataset.key = key;
+      return node;
+    };
     if (TEXT_KINDS.has(layer.kind)) {
       const font = host.fonts().find((item) => item.family === layer.font);
-      const fontKey = keyButton("ag-font-key", font?.name ?? labels.defaultFont, ICONS.text);
-      fontKey.setAttribute("aria-haspopup", "listbox");
+      const fontKey = keyed(keyButton("ag-font-key", font?.name ?? labels.defaultFont, ICONS.text), "font");
+      fontKey.setAttribute("aria-haspopup", "dialog");
+      fontKey.setAttribute("aria-expanded", "false");
+      fontKey.setAttribute("aria-controls", pop.id);
       fontKey.setAttribute("aria-label", `${labels.font}: ${font?.name ?? labels.defaultFont}`);
       fontKey.addEventListener("click", () => fontPop(fontKey, find(layer.id)!));
       const sizeGroup = element("div", "ag-size");
-      const smaller = iconButton("", labels.smaller, ICONS.minus);
-      const larger = iconButton("", labels.larger, ICONS.add);
-      const sizeInput = element("input", "ag-input ag-size-input");
+      const sizeName = element("span", "ag-size-name");
+      sizeName.textContent = labels.size;
+      sizeName.setAttribute("aria-hidden", "true");
+      const smaller = keyed(iconButton("", labels.smaller, ICONS.minus), "smaller");
+      const larger = keyed(iconButton("", labels.larger, ICONS.add), "larger");
+      const sizeInput = keyed(element("input", "ag-input ag-size-input"), "size");
       sizeInput.type = "number";
       sizeInput.min = "8";
       sizeInput.max = "400";
@@ -543,56 +807,72 @@ export function createStage(host: StageHost): Stage {
       smaller.addEventListener("click", () => setSize((find(layer.id)!.size ?? 40) - 2));
       larger.addEventListener("click", () => setSize((find(layer.id)!.size ?? 40) + 2));
       sizeInput.addEventListener("change", () => setSize(Number(sizeInput.value) || 40));
-      sizeGroup.append(smaller, sizeInput, larger);
-      const strong = (layer.weight ?? (layer.kind === "title" ? 700 : layer.kind === "captions" ? 650 : 400)) >= 600;
-      const bold = element("button", "ag-btn ag-glyph");
-      bold.type = "button";
-      bold.textContent = "B";
-      bold.setAttribute("aria-label", labels.bold);
-      bold.title = labels.bold;
-      bold.setAttribute("aria-pressed", String(strong));
-      bold.addEventListener("click", () => update(find(layer.id)!, { weight: strong ? 400 : 700 }));
-      const italic = element("button", "ag-btn ag-glyph ag-italic");
-      italic.type = "button";
-      italic.textContent = "I";
-      italic.setAttribute("aria-label", labels.italic);
-      italic.title = labels.italic;
-      italic.setAttribute("aria-pressed", String(Boolean(layer.italic)));
-      italic.addEventListener("click", () => update(find(layer.id)!, { italic: !find(layer.id)!.italic }));
+      sizeGroup.append(sizeName, smaller, sizeInput, larger);
+      const weight = layer.weight ?? (layer.kind === "title" ? 700 : layer.kind === "captions" ? 650 : 400);
+      const strong = weight >= 600;
+      // A font with no heavier or slanted files would be faked by each browser its own way, so those keys rest.
+      const canBold = !font || heaviest(font) >= 600;
+      const canItalic = !font || font.files.some((file) => file.style === "italic");
+      const glyph = (key: string, text: string, label: string, pressed: boolean, allowed: boolean, missing: string, run: () => void) => {
+        const button = keyed(element("button", `ag-btn ag-glyph${key === "italic" ? " ag-italic" : ""}`), key);
+        button.type = "button";
+        button.textContent = text;
+        button.setAttribute("aria-label", label);
+        button.title = allowed ? label : missing;
+        button.setAttribute("aria-pressed", String(pressed));
+        if (!allowed && !pressed) button.setAttribute("aria-disabled", "true");
+        button.addEventListener("click", () => (allowed || pressed) && run());
+        return button;
+      };
+      const bold = glyph("bold", "B", labels.bold, strong, canBold, labels.boldMissing, () => update(find(layer.id)!, { weight: strong ? 400 : 700 }));
+      const italic = glyph("italic", "I", labels.italic, Boolean(layer.italic), canItalic, labels.italicMissing, () => update(find(layer.id)!, { italic: !find(layer.id)!.italic }));
       const quiet = layer.kind === "handle" || layer.kind === "links" || layer.kind === "time";
-      const colour = swatch(paintOf(layer.color, theme, quiet ? "muted" : "text"), labels.colour, () => colourPop(colour, layer.color, quiet ? "muted" : "text", (paint) => update(find(layer.id)!, { color: paint })));
-      colour.setAttribute("aria-haspopup", "dialog");
+      const colour = colourKey("colour", labels.colour, paintOf(layer.color, theme, quiet ? "muted" : "text"), (anchor) => colourPop(anchor, layer.color, quiet ? "muted" : "text", (paint) => update(find(layer.id)!, { color: paint })));
       toolbar.append(fontKey, sizeGroup, bold, italic, colour);
       if (layer.kind === "captions") {
-        const highlight = swatch(paintOf(layer.highlight, theme, "accent"), labels.highlight, () => colourPop(highlight, layer.highlight, "accent", (paint) => update(find(layer.id)!, { highlight: paint })));
-        highlight.classList.add("ag-highlight-key");
-        toolbar.append(highlight);
+        toolbar.append(colourKey("highlight", labels.highlight, paintOf(layer.highlight, theme, "accent"), (anchor) => colourPop(anchor, layer.highlight, "accent", (paint) => update(find(layer.id)!, { highlight: paint }))));
       }
       const order = ["left", "center", "right"] as const;
       const align = layer.align ?? "left";
-      const alignKey = iconButton("", `${labels.align}: ${align}`, ALIGN_ICONS[align]);
+      const alignKey = keyed(keyButton("", labels.align, ALIGN_ICONS[align]), "align");
+      alignKey.setAttribute("aria-label", `${labels.align}: ${labels.alignNames[align]}`);
       alignKey.addEventListener("click", () => update(find(layer.id)!, { align: order[(order.indexOf(align) + 1) % order.length] }));
       toolbar.append(alignKey);
+      if (TYPED_KINDS.has(layer.kind)) {
+        const edit = keyed(keyButton("", labels.editText, ICONS.text), "edit");
+        edit.addEventListener("click", () => editText(layer.id));
+        toolbar.append(edit);
+      }
     } else if (layer.kind === "shape" || layer.kind === "visual") {
-      const key = layer.kind === "shape" ? "fill" : "color";
-      const fill = swatch(paintOf(layer[key], theme, "accent"), labels.fill, () => colourPop(fill, layer[key], "accent", (paint) => update(find(layer.id)!, { [key]: paint } as Partial<Layer>)));
-      toolbar.append(fill);
+      const property = layer.kind === "shape" ? "fill" : "color";
+      toolbar.append(colourKey("fill", labels.fill, paintOf(layer[property], theme, "accent"), (anchor) => colourPop(anchor, layer[property], "accent", (paint) => update(find(layer.id)!, { [property]: paint } as Partial<Layer>))));
+    } else if (layer.kind === "image" || layer.kind === "avatar") {
+      const swap = keyed(keyButton("", labels.replace, ICONS.photo), "replace");
+      swap.addEventListener("click", () => host.replace(find(layer.id)!));
+      toolbar.append(swap);
     }
-    const more = keyButton("ag-more-key", labels.more, ICONS.more);
+    const more = keyed(keyButton("ag-more-key", labels.more, ICONS.more), "more");
     more.setAttribute("aria-haspopup", "dialog");
+    more.setAttribute("aria-expanded", "false");
+    more.setAttribute("aria-controls", pop.id);
     more.addEventListener("click", () => morePop(more, find(layer.id)!));
     const added = ADDED_KINDS.has(layer.kind);
-    const remove = keyButton("ag-remove-key", added ? labels.remove : labels.hide, added ? ICONS.trash : ICONS.hide);
+    const remove = keyed(keyButton("ag-remove-key", added ? labels.remove : labels.hide, added ? ICONS.trash : ICONS.hide), "remove");
     remove.addEventListener("click", () => removeLayer(find(layer.id)!));
     toolbar.append(more, remove);
+    focusKey(active);
   }
 
   function select(id: string | null) {
-    if (editing && id !== editing) finishTyping();
+    if (editing && id !== editing) finishTyping(false);
     const changed = id !== selectedId;
     selectedId = id;
     hover.hidden = true;
-    if (changed) buildToolbar(find(id));
+    if (changed) {
+      const layer = find(id);
+      buildToolbar(layer);
+      if (layer) host.announce(labels.selected(host.layerName(layer)));
+    }
     draw();
   }
 
@@ -604,12 +884,16 @@ export function createStage(host: StageHost): Stage {
     },
     select,
     refresh() {
-      if (selectedId && !find(selectedId)) {
+      const layer = find(selectedId);
+      if (selectedId && (!layer || layer.hidden)) {
         selectedId = null;
         buildToolbar(null);
-      }
+      } else if (layer && !gesture && pop.hidden && JSON.stringify(layer) !== toolbarFor) buildToolbar(layer);
       draw();
     },
     editText,
+    focus() {
+      overlay.focus({ preventScroll: true });
+    },
   };
 }

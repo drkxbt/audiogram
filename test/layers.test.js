@@ -97,3 +97,22 @@ test("a turned layer resizes along its own sides, and its far side stays put on 
   near(flat.w, 0.3);
   near(flat.h, 0.15);
 });
+
+test("turning settles on upright and on each quarter turn when it comes within a few degrees, Shift or not", () => {
+  const layer = { id: "t", kind: "text", x: 0.4, y: 0.4, w: 0.2, h: 0.2, rotation: 0, opacity: 1 };
+  const towards = (degrees) => {
+    const angle = (degrees * Math.PI) / 180;
+    return [0.5 + Math.sin(angle) * 0.3, 0.5 - Math.cos(angle) * 0.3];
+  };
+  near(rotateLayer(layer, ...towards(3), 1, 1, false).rotation, 0);
+  near(rotateLayer(layer, ...towards(357), 1, 1, false).rotation, 0);
+  near(rotateLayer(layer, ...towards(87), 1, 1, false).rotation, 90);
+  near(rotateLayer(layer, ...towards(30), 1, 1, false).rotation, 30, 1e-6);
+});
+
+test("pulling one side leaves the other dimension alone, so a thin line stays thin", () => {
+  const line = { id: "l", kind: "shape", x: 0.2, y: 0.5, w: 0.4, h: 0.005, rotation: 0, opacity: 1 };
+  const longer = resizeLayer(line, "e", 0.1, 0, false);
+  near(longer.w, 0.5);
+  near(longer.h, 0.005);
+});
