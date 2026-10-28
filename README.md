@@ -2,6 +2,8 @@
 
 Turn the recording of a Space, a podcast or a voice note into a video clip for X, in the browser. Drag over the minute worth sharing, and it becomes a video with your picture and name, bars that move with the voice, and captions that light up word by word. Tap along to time the captions, pick a shape and colours, and export an MP4. Plain TypeScript, no dependencies; the audio never leaves the computer and there is no watermark.
 
+Make a clip on [drk.vc](https://drk.vc/repo?id=audiogram#preview), nothing to install.
+
 ![A MacBook and an iPhone running the clip maker in Safari: on the MacBook, a sample Space plays with green bars moving to the voice and the caption lighting up word by word, then the visual changes to a wave, the colours to mint and the shape to tall, and the captions are timed by tapping the picture; on the iPhone, the clip plays in the tall shape, is shortened from its end, and changes to the pulse visual and dusk colours](demo/preview.webp)
 
 Audiogram apps such as Headliner charge a monthly plan for unlimited clips without a watermark. This one is MIT licensed: use it in a product, change it, ship it.
