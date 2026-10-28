@@ -5,8 +5,11 @@ import { Painter, SIZES, THEMES, type Layout, type Overlay, type Scene, type The
 import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
 import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
 import { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
+import { defaultLayers, type Layer } from "./layers.js";
+import { createStage, type FontChoice, type StageLabels } from "./stage.js";
+import { textHeight } from "./render.js";
 
-export type Tab = "design" | "text" | "photos" | "music" | "captions";
+export type Tab = "design" | "elements" | "text" | "photos" | "music" | "captions";
 
 export interface Labels {
   editor: string;
@@ -80,6 +83,23 @@ export interface Labels {
   spread: string;
   loading: string;
   empty: string;
+  stage: StageLabels;
+  undo: string;
+  redo: string;
+  layoutName: string;
+  resetLayout: string;
+  shapes: string;
+  shapeNames: { square: string; rounded: string; circle: string; line: string };
+  addText: string;
+  addHeading: string;
+  addSubheading: string;
+  addBody: string;
+  newText: { heading: string; subheading: string; body: string };
+  uploads: string;
+  upload: string;
+  addPicture: (name: string) => string;
+  forgetPicture: string;
+  pictureTooBig: string;
 }
 
 export interface EditorOptions {
@@ -120,6 +140,12 @@ export interface EditorOptions {
   onParts?: (parts: Array<[number, number]>) => void;
   /** Called after the look changes through the editor, at most once a frame. */
   onChange?: (settings: Settings) => void;
+  /** The frame laid out as layers, for each shape that has been changed from the classic layout. */
+  layers?: Partial<Record<Layout, Layer[]>>;
+  /** The pictures the user has uploaded, by key: the ones in the layers and the rest of their library. */
+  images?: Record<string, Blob | string>;
+  /** Fonts to offer, each loaded only when used. */
+  fonts?: FontChoice[];
 }
 
 /** The look of the clip as it stands: what a page would keep to start the next clip the same way. */
@@ -141,6 +167,9 @@ export interface Settings {
   visual: Visual;
   /** An index into THEMES, or the theme itself when it isn't one of them. */
   theme: number | Theme;
+  /** The layout of each shape the user changed, and their uploaded pictures by key. */
+  layers: Partial<Record<Layout, Layer[]>>;
+  images: Record<string, Blob | string>;
 }
 
 export interface Editor {
@@ -168,6 +197,10 @@ export interface Editor {
   selectTab(tab: Tab): void;
   /** Places for a page's own controls: in the header after Open audio, in the header before Download, and at the top of the Captions tab. */
   readonly slots: { header: HTMLElement; actions: HTMLElement; captions: HTMLElement };
+  /** Fonts to offer, for a page that loads its list after the editor opens. */
+  setFonts(fonts: FontChoice[]): void;
+  /** Uploaded pictures by key, for a page that keeps them somewhere slower to read than the options. */
+  setImages(images: Record<string, Blob | string>): Promise<void>;
   destroy(): void;
 }
 
@@ -201,7 +234,7 @@ const DEFAULT_LABELS: Labels = {
   parts: "Parts of the clip, in order",
   part: (index, from, to) => `Part ${index}, ${from} to ${to}`,
   removePart: (index) => `Remove part ${index}`,
-  tabs: { design: "Design", text: "Text", photos: "Photos", music: "Music", captions: "Captions" },
+  tabs: { design: "Design", elements: "Elements", text: "Text", photos: "Photos", music: "Music", captions: "Captions" },
   shape: "Shape",
   layouts: { square: "Square", portrait: "Portrait", story: "Story", landscape: "Wide" },
   visual: "Animation",
@@ -243,10 +276,56 @@ const DEFAULT_LABELS: Labels = {
   spread: "Use as captions",
   loading: "Opening the recording",
   empty: "Open a recording of a Space, a podcast or a voice note to start.",
+  stage: {
+    picture: "The picture: press a part to select it, drag to move it",
+    defaultFont: "Default",
+    font: "Font",
+    size: "Font size",
+    smaller: "Smaller",
+    larger: "Larger",
+    bold: "Bold",
+    italic: "Italic",
+    colour: "Colour",
+    highlight: "Highlight colour",
+    fill: "Colour",
+    align: "Align",
+    more: "More",
+    forward: "Bring forward",
+    backward: "Send backward",
+    duplicate: "Duplicate",
+    remove: "Delete",
+    hide: "Hide",
+    opacity: "Opacity",
+    corners: "Rounded corners",
+    themeColours: "Theme",
+    colours: "Colours",
+    custom: "Custom colour",
+    themeColour: (name) => (name === "accent" ? "Theme accent" : name === "muted" ? "Theme soft text" : "Theme text"),
+  },
+  undo: "Undo",
+  redo: "Redo",
+  layoutName: "Layout",
+  resetLayout: "Reset layout",
+  shapes: "Shapes",
+  shapeNames: { square: "Square", rounded: "Rounded", circle: "Circle", line: "Line" },
+  addText: "Add text",
+  addHeading: "Add a heading",
+  addSubheading: "Add a subheading",
+  addBody: "Add a little text",
+  newText: { heading: "Your heading", subheading: "Your subheading", body: "Your text" },
+  uploads: "Your pictures",
+  upload: "Upload pictures",
+  addPicture: (name) => `Add ${name} to the picture`,
+  forgetPicture: "Remove from your pictures",
+  pictureTooBig: "That picture is over 20 MB. Try a smaller one.",
 };
 
-const TABS: Tab[] = ["design", "text", "photos", "music", "captions"];
-const TAB_ICONS: Record<Tab, string> = { design: ICONS.design, text: ICONS.text, photos: ICONS.photo, music: ICONS.music, captions: ICONS.captions };
+const TABS: Tab[] = ["design", "elements", "text", "photos", "music", "captions"];
+const TAB_ICONS: Record<Tab, string> = { design: ICONS.design, elements: ICONS.elements, text: ICONS.text, photos: ICONS.photo, music: ICONS.music, captions: ICONS.captions };
+// Uploaded pictures: the kinds every browser draws, up to a size a phone can hold several of.
+const PICTURE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"];
+const PICTURE_LIMIT = 20 * 1024 * 1024;
+const LAYOUTS: Layout[] = ["square", "portrait", "story", "landscape"];
 const RATIOS: Record<Layout, string> = { square: "1:1", portrait: "4:5", story: "9:16", landscape: "16:9" };
 
 const MIN_LENGTH = 1;
@@ -333,6 +412,14 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let tapIndex = 0;
   let exporting = false;
   let tab: Tab = "design";
+  // The frame's layers for each shape the user has changed; the classic layout stands for the rest.
+  let designs: Partial<Record<Layout, Layer[]>> = Object.fromEntries(LAYOUTS.filter((name) => options.layers?.[name]).map((name) => [name, options.layers![name]!.map((layer) => ({ ...layer }))]));
+  const layersFor = (shape: Layout) => designs[shape] ?? defaultLayers(shape);
+  // Uploaded pictures by key, as given and as drawn; `listed` ones show in the Photos panel.
+  const pictures = new Map<string, { source: Blob | string; image: HTMLImageElement | null; url: string | null; listed: boolean }>();
+  let editingLayer: string | null = null;
+  let fontList: FontChoice[] = options.fonts ?? [];
+  const fontsAdded = new Set<string>();
   // The range given with the options belongs to the first recording; another one opens at its own start.
   let firstLoad = true;
 
@@ -355,7 +442,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const exportButton = keyButton("ag-export", labels.export, ICONS.export);
   const meter = element("span", "ag-meter");
   exportButton.append(meter);
-  header.append(openButton, audioInput, headerSlot, element("span", "ag-grow"), actionsSlot, exportButton);
+  const undoButton = keyButton("ag-undo", labels.undo, ICONS.undo);
+  const redoButton = keyButton("ag-redo", labels.redo, ICONS.redo);
+  header.append(openButton, audioInput, headerSlot, element("span", "ag-grow"), undoButton, redoButton, actionsSlot, exportButton);
 
   const body = element("div", "ag-body");
   const rail = element("div", "ag-rail");
@@ -398,7 +487,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     next.click();
   });
 
-  const stage = element("div", "ag-stage");
+  const stageArea = element("div", "ag-stage");
   const preview = element("canvas", "ag-preview");
   preview.setAttribute("role", "img");
   preview.tabIndex = 0;
@@ -408,8 +497,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   emptyNote.textContent = labels.empty;
   const notice = element("p", "ag-notice");
   notice.hidden = true;
-  stage.append(preview, tapHint, emptyNote, notice);
-  body.append(rail, drawer, stage);
+  stageArea.append(preview, tapHint, emptyNote, notice);
+  body.append(rail, drawer, stageArea);
 
   const heading = (pane: HTMLElement, text: string) => {
     const node = element("h3", "ag-heading");
@@ -487,6 +576,29 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     changed();
   });
   themeTiles.classList.add("ag-swatches");
+  heading(panes.design, labels.layoutName);
+  const resetButton = keyButton("ag-reset", labels.resetLayout, ICONS.reset);
+  panes.design.append(resetButton);
+
+  heading(panes.elements, labels.shapes);
+  const shapeTiles = element("div", "ag-tiles");
+  shapeTiles.style.setProperty("--ag-count", "4");
+  const shapeKinds = [
+    { name: labels.shapeNames.square, markup: ICONS.shapeSquare, make: (): Partial<Layer> => ({ shape: "rect", radius: 0 }) },
+    { name: labels.shapeNames.rounded, markup: ICONS.shapeRounded, make: (): Partial<Layer> => ({ shape: "rect", radius: 0.18 }) },
+    { name: labels.shapeNames.circle, markup: ICONS.shapeCircle, make: (): Partial<Layer> => ({ shape: "ellipse" }) },
+    { name: labels.shapeNames.line, markup: ICONS.shapeLine, make: (): Partial<Layer> => ({ shape: "rect", radius: 0.5, line: true } as Partial<Layer>) },
+  ];
+  for (const kind of shapeKinds) {
+    const tile = element("button", "ag-tile");
+    tile.type = "button";
+    const text = element("span", "ag-tile-text");
+    text.textContent = kind.name;
+    tile.append(icon(kind.markup), text);
+    tile.addEventListener("click", () => addShape(kind.make()));
+    shapeTiles.append(tile);
+  }
+  panes.elements.append(shapeTiles);
   for (const [index, button] of [...themeTiles.children].entries()) button.setAttribute("aria-label", labels.theme(THEMES[index].name));
 
   // Text: what the frame says, and up to three links.
@@ -526,12 +638,19 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     });
     return input;
   }));
-  panes.text.append(
-    field(labels.title, title, (value) => (title = value)),
-    field(labels.speaker, speaker, (value) => (speaker = value)),
-    field(labels.handle, handle, (value) => (handle = value)),
-    linkGroup,
-  );
+  heading(panes.text, labels.addText);
+  const textPresets = element("div", "ag-text-presets");
+  for (const [kind, name, size, weight] of [["heading", labels.addHeading, 96, 800], ["subheading", labels.addSubheading, 60, 650], ["body", labels.addBody, 38, 400]] as const) {
+    const button = element("button", `ag-text-preset ag-text-${kind}`);
+    button.type = "button";
+    button.textContent = name;
+    button.addEventListener("click", () => addText(labels.newText[kind], size, weight));
+    textPresets.append(button);
+  }
+  const titleField = field(labels.title, title, (value) => (title = value));
+  const speakerField = field(labels.speaker, speaker, (value) => (speaker = value));
+  const handleField = field(labels.handle, handle, (value) => (handle = value));
+  panes.text.append(textPresets, titleField, speakerField, handleField, linkGroup);
 
   // Photos and music: each a row with what is on now, a key to choose one, and a key to take it off.
   const fileRow = (pane: HTMLElement, name: string, accept: string, kind: "round" | "wide" | "sound", failed: string, apply: (file: Blob | null) => Promise<void>) => {
@@ -593,6 +712,15 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     rebuild();
     changed();
   });
+  heading(panes.photos, labels.uploads);
+  const uploadButton = keyButton("ag-upload", labels.upload, ICONS.upload);
+  const uploadInput = element("input", "ag-hidden");
+  uploadInput.type = "file";
+  uploadInput.accept = PICTURE_TYPES.join(",");
+  uploadInput.multiple = true;
+  uploadInput.tabIndex = -1;
+  const uploadGrid = element("div", "ag-uploads");
+  panes.photos.append(uploadButton, uploadInput, uploadGrid);
 
   const musicAudio = new Audio();
   musicAudio.loop = true;
@@ -773,6 +901,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     backdrop,
     logo,
     links,
+    layers: layersFor(layout).map((layer) => (layer.id === editingLayer ? { ...layer, hidden: true } : layer)),
+    images: new Map([...pictures].filter(([, picture]) => picture.image).map(([key, picture]) => [key, picture.image!])),
     music: music ? { samples: music.samples, gain: musicVolume } : null,
     captions: paginate(parts.length ? stitchCues(cues, parts) : clip(cues, range[0], range[1]), pageLength(layout)),
     audio: { samples: samples ?? (clipAudio?.key === clipKey() ? clipAudio.samples : SILENCE), sampleRate: SAMPLE_RATE, start: 0, end: Math.max(0, clipLength()) },
@@ -780,6 +910,32 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   let painter = new Painter(scene());
   const ctx = preview.getContext("2d", { alpha: false })!;
+  const stage = createStage({
+    stage: stageArea,
+    canvas: preview,
+    labels: labels.stage,
+    layers: () => layersFor(layout),
+    change: setLayers,
+    theme: () => theme,
+    fonts: () => fontList,
+    loadFont: (name, sample) => loadFont(name, sample).then(() => rebuild()),
+    textOf: (layer) => painter.textOf(layer, 0),
+    setText(layer, text) {
+      if (layer.kind === "title") title = text;
+      else if (layer.kind === "name") speaker = text;
+      else if (layer.kind === "handle") handle = text;
+      if (layer.kind === "text") setLayers(layersFor(layout).map((item) => (item.id === layer.id ? { ...item, text } : item)), false);
+      else rebuild();
+      titleField.querySelector("input")!.value = title;
+      speakerField.querySelector("input")!.value = speaker;
+      handleField.querySelector("input")!.value = handle;
+    },
+    setEditing(id) {
+      editingLayer = id;
+      rebuild();
+    },
+    enabled: () => !tapping && !exporting && root.dataset.state !== "empty",
+  });
 
   function sizePreview() {
     // Half size: plenty for a preview, and a quarter of the pixels to paint every frame.
@@ -788,7 +944,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       preview.width = width / 2;
       preview.height = height / 2;
     }
-    stage.dataset.layout = layout;
+    stageArea.dataset.layout = layout;
   }
 
   function paint() {
@@ -811,6 +967,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     layout,
     visual,
     theme: THEMES.includes(theme) ? THEMES.indexOf(theme) : theme,
+    layers: Object.fromEntries(Object.entries(designs).map(([name, list]) => [name, list!.map((layer) => ({ ...layer }))])),
+    images: Object.fromEntries([...pictures].filter(([key, picture]) => picture.listed || usedPicture(key)).map(([key, picture]) => [key, picture.source])),
   });
 
   // The page hears about a change to the look once a frame, however many inputs moved in it.
@@ -830,6 +988,135 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     sizePreview();
     paint();
     renderCues();
+    stage?.refresh();
+  }
+
+  // Free editing: layers, their history, what can be added, and the fonts and pictures they use.
+
+  const measurer = element("canvas", "").getContext("2d")!;
+  const family = options.font ?? "Geist, ui-sans-serif, system-ui, sans-serif";
+  /** Free text grows and shrinks with its words. */
+  const fitted = (layer: Layer): Layer => {
+    if (layer.kind !== "text") return layer;
+    const { width, height } = SIZES[layout];
+    return { ...layer, h: Math.max(0.02, textHeight(measurer, layer, layer.text ?? "", family, width, height)) };
+  };
+  const usedPicture = (key: string) => LAYOUTS.some((name) => layersFor(name).some((layer) => layer.image === key));
+
+  // Each change ended by the user is a step to undo: the layers of every shape and the frame's own words.
+  const history: string[] = [];
+  let historyAt = -1;
+  const snapshot = () => JSON.stringify({ designs, title, speaker, handle });
+  function record() {
+    const now = snapshot();
+    if (history[historyAt] === now) return;
+    history.splice(historyAt + 1);
+    history.push(now);
+    if (history.length > 100) history.shift();
+    historyAt = history.length - 1;
+    undoButton.disabled = historyAt <= 0;
+    redoButton.disabled = true;
+  }
+  function travel(step: number) {
+    const to = historyAt + step;
+    if (to < 0 || to >= history.length) return;
+    historyAt = to;
+    const state = JSON.parse(history[to]) as { designs: typeof designs; title: string; speaker: string; handle: string };
+    ({ designs, title, speaker, handle } = state);
+    titleField.querySelector("input")!.value = title;
+    speakerField.querySelector("input")!.value = speaker;
+    handleField.querySelector("input")!.value = handle;
+    undoButton.disabled = historyAt <= 0;
+    redoButton.disabled = historyAt >= history.length - 1;
+    rebuild();
+    changed();
+  }
+
+  function setLayers(next: Layer[], done: boolean) {
+    designs = { ...designs, [layout]: next.map(fitted) };
+    rebuild();
+    if (done) {
+      record();
+      changed();
+    }
+  }
+
+  /** A new layer in the middle of the frame, selected, on top of the rest. */
+  function addLayer(layer: Layer) {
+    setLayers([...layersFor(layout), fitted(layer)], true);
+    stage.select(layer.id);
+  }
+  let added = 0;
+  const layerId = (kind: string) => `${kind}-${Date.now().toString(36)}${(added++).toString(36)}`;
+
+  function addText(text: string, size: number, weight: number) {
+    const id = layerId("text");
+    addLayer({ id, kind: "text", text, x: 0.1, y: 0.42, w: 0.8, h: 0.1, rotation: 0, opacity: 1, size, weight, align: "center", color: "text" });
+    stage.editText(id);
+  }
+
+  function addShape(shape: Partial<Layer> & { line?: boolean }) {
+    const { width, height } = SIZES[layout];
+    const side = 0.3 * Math.min(width, height);
+    const { line, ...style } = shape;
+    const w = (line ? side * 1.6 : side) / width;
+    const h = (line ? Math.max(6, side * 0.03) : side) / height;
+    addLayer({ id: layerId("shape"), kind: "shape", x: 0.5 - w / 2, y: 0.5 - h / 2, w, h, rotation: 0, opacity: 1, fill: "accent", ...style });
+  }
+
+  function addPicture(key: string) {
+    const picture = pictures.get(key);
+    if (!picture?.image) return;
+    const { width, height } = SIZES[layout];
+    const scale = Math.min((width * 0.5) / picture.image.naturalWidth, (height * 0.5) / picture.image.naturalHeight);
+    const w = (picture.image.naturalWidth * scale) / width;
+    const h = (picture.image.naturalHeight * scale) / height;
+    addLayer({ id: layerId("image"), kind: "image", image: key, x: 0.5 - w / 2, y: 0.5 - h / 2, w, h, rotation: 0, opacity: 1 });
+  }
+
+  async function keepPicture(source: Blob | string, key: string, listed: boolean) {
+    const image = await loadImage(source);
+    pictures.set(key, { source, image, url: image.src.startsWith("blob:") ? image.src : null, listed });
+  }
+
+  function renderUploads() {
+    uploadGrid.replaceChildren(...[...pictures].filter(([, picture]) => picture.listed && picture.image).map(([key, picture]) => {
+      const item = element("div", "ag-upload-item");
+      const add = element("button", "ag-upload-add");
+      add.type = "button";
+      add.setAttribute("aria-label", labels.addPicture(picture.source instanceof File ? picture.source.name : key));
+      const thumb = element("img", "");
+      thumb.alt = "";
+      thumb.src = picture.image!.src;
+      add.append(thumb);
+      add.addEventListener("click", () => addPicture(key));
+      const forget = iconButton("ag-upload-forget", labels.forgetPicture, ICONS.remove);
+      forget.addEventListener("click", () => {
+        picture.listed = false;
+        if (!usedPicture(key)) pictures.delete(key);
+        renderUploads();
+        changed();
+      });
+      item.append(add, forget);
+      return item;
+    }));
+  }
+
+  /** Registers a font's files once and loads the ones `sample` needs; the picture is drawn again when they arrive. */
+  async function loadFont(name: string, sample = "Ab") {
+    const font = fontList.find((item) => item.family === name);
+    if (!font) return;
+    if (!fontsAdded.has(name)) {
+      fontsAdded.add(name);
+      for (const file of font.files) document.fonts.add(new FontFace(name, `url("${file.url}") format("woff2")`, { weight: file.weight, unicodeRange: file.unicodeRange }));
+    }
+    await Promise.all([400, 700].map((weight) => document.fonts.load(`${weight} 40px "${name}"`, sample || "Ab").catch(() => [])));
+  }
+  /** Every font the layers use, loaded, so the picture and the export never fall back. */
+  async function loadUsedFonts() {
+    const used = new Map<string, string>();
+    for (const layer of layersFor(layout)) if (layer.font && !layer.hidden) used.set(layer.font, `${used.get(layer.font) ?? ""} ${painter.textOf(layer, 0)} ${layer.kind === "captions" ? cues.map((cue) => cue.text).join(" ").slice(0, 2000) : ""}`);
+    await Promise.all([...used].map(([name, sample]) => loadFont(name, sample)));
   }
 
   // The clip's own sound, read from the recording at 48 kHz once its stretches settle, for the picture and the export.
@@ -1235,6 +1522,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     root.dataset.state = "exporting";
     exportButton.setAttribute("aria-disabled", "true");
     try {
+      await loadUsedFonts();
       const frozen = scene();
       const samples = await loadClip();
       const result = await exportClip({ ...frozen, audio: { ...frozen.audio, samples } }, {
@@ -1530,6 +1818,50 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     renderCues();
   });
 
+  undoButton.addEventListener("click", () => travel(-1));
+  redoButton.addEventListener("click", () => travel(1));
+  resetButton.addEventListener("click", () => {
+    // The classic layout back for this shape, keeping what the user added on top.
+    setLayers([...defaultLayers(layout), ...layersFor(layout).filter((layer) => layer.kind === "text" || layer.kind === "image" || layer.kind === "shape")], true);
+    stage.select(null);
+  });
+  uploadButton.addEventListener("click", () => uploadInput.click());
+  uploadInput.addEventListener("change", async () => {
+    const files = [...(uploadInput.files ?? [])];
+    uploadInput.value = "";
+    for (const file of files) {
+      if (!PICTURE_TYPES.includes(file.type)) {
+        tell(labels.pictureFailed);
+        continue;
+      }
+      if (file.size > PICTURE_LIMIT) {
+        tell(labels.pictureTooBig);
+        continue;
+      }
+      const key = layerId("picture");
+      try {
+        await keepPicture(file, key, true);
+      } catch {
+        tell(labels.pictureFailed);
+        continue;
+      }
+      // One picture goes straight onto the frame; several wait in the panel to be placed.
+      if (files.length === 1) addPicture(key);
+    }
+    renderUploads();
+    changed();
+  });
+  // Ctrl or Cmd with Z undoes, with Shift (or Y) redoes, unless someone is typing.
+  root.addEventListener("keydown", (event) => {
+    const target = event.target as HTMLElement;
+    if (!(event.ctrlKey || event.metaKey) || target.closest("input, textarea")) return;
+    const key = event.key.toLowerCase();
+    if (key === "z" || key === "y") {
+      event.preventDefault();
+      travel(key === "y" || event.shiftKey ? 1 : -1);
+    }
+  });
+
   // Space plays and pauses, unless someone is typing; while tapping, it marks the next caption instead.
   root.addEventListener("keydown", (event) => {
     const target = event.target as HTMLElement;
@@ -1595,6 +1927,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     rebuild();
   });
   if (options.music) void setMusic(options.music).then(() => musicRow.show(options.music!)).catch(() => musicRow.show(null));
+  for (const [key, source] of Object.entries(options.images ?? {})) void keepPicture(source, key, true).then(() => {
+    renderUploads();
+    rebuild();
+  }).catch(() => {});
+  void loadUsedFonts().then(() => rebuild());
+  record();
   if (options.logo) void loadImage(options.logo).then((image) => {
     logo = image;
     rebuild();
@@ -1659,6 +1997,16 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     },
     selectTab,
     slots: { header: headerSlot, actions: actionsSlot, captions: captionsSlot },
+    setFonts(next) {
+      fontList = next;
+      void loadUsedFonts().then(() => rebuild());
+      stage.refresh();
+    },
+    async setImages(next) {
+      await Promise.all(Object.entries(next).filter(([key]) => !pictures.has(key)).map(([key, image]) => keepPicture(image, key, true).catch(() => {})));
+      renderUploads();
+      rebuild();
+    },
     destroy() {
       stop();
       observer.disconnect();

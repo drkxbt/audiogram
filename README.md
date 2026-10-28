@@ -13,6 +13,7 @@ Audiogram apps such as Headliner charge a monthly plan for unlimited clips witho
 - **Captions, word by word.** The word being said is marked as it is said, said words turn bright and the rest wait in grey. Long lines break into pages that fit the shape of the video.
 - **Timing without a transcript service.** Paste a transcript and it is spread over the clip by how long each line takes to say; then tap the picture as each line starts and the captions snap to your taps. SRT and WebVTT files open, and the clip's captions save as SRT.
 - **Named tools.** Design, Text, Photos, Music and Captions each have a labelled tab, down the left, or in a row under the timeline on a phone. One panel is open at a time, so no panel needs scrolling. Open audio and Download are at the top.
+- **Edit the picture freely.** Every part of the frame is a layer. Press one to select it, drag it (it snaps to the middle, the edges and the other parts), pull a handle to size it or the round one to turn it, and double-click words to type them. The bar above the picture sets the font, size, weight, colour, alignment and opacity, and brings a part forward or back, duplicates it or deletes it. Add headings, shapes and your own pictures, and undo or redo any step. Each shape keeps a layout of its own.
 - **A look of your own.** Square, 4:5, 9:16 or 16:9. Bars that follow the voice's pitches, a scrolling wave, or rings that pulse. Five colour themes, your picture, name, handle and a title, the clip's time by the visual, and up to three links along the bottom.
 - **An MP4 in seconds.** Where the browser has WebCodecs with H.264 and AAC, as Chrome and Edge do, the video is made faster than it plays, frame by frame, and written to an MP4 by a muxer in this package. Elsewhere it is recorded as it plays.
 - **Private.** Nothing is uploaded: the audio is decoded, drawn and encoded in the page.
@@ -67,14 +68,17 @@ Give the container a height; the editor fills it. Without `onExport`, the finish
 | `labels` | English | Every name and message, for other languages. |
 | `music` | | Music under the voice, an address or a `Blob` of any audio the browser can decode. It loops, comes in over a second and leaves over a second and a half, and the mix is kept from clipping. The visual follows the voice alone. |
 | `musicVolume` | `0.25` | The music's level, 0 to 1. |
+| `layers` | | The frame as layers for any shape the user changed, as `settings.layers` gives them back. |
+| `images` | | Uploaded pictures by key, a `Blob` or an address each, as `settings.images` gives them back. |
+| `fonts` | | Fonts to offer: `{ name, family, category, files: [{ url, weight, unicodeRange }] }`. Each file is fetched only when a layer uses it, and every font in use is loaded before a video is made. |
 | `parts` | | Stretches of the recording, `[start, end]` in seconds, played one after another as the clip; each join fades over 0.15 s. Empty means the clip is the selected stretch. |
 | `onParts` | | Called with the parts after they change in the editor: added, removed or reordered. |
 | `overlay` | | `(ctx, frame) => void`, drawn last on every frame of the preview and the export. `frame` holds `time` and `duration` in seconds, the canvas's `width` and `height`, `unit` (one pixel of a 1080 px design at this size), `theme` and `font`. |
 | `onChange` | | Called with the clip's look (`settings`) after the user changes it, at most once a frame. |
 
-`audiogram()` returns `{ element, captions, range, duration, parts, settings, source, slots, load(audio), readAudio(start, end, sampleRate), setParts(parts), setCaptions(cues), setRange(start, end), setOverlay(overlay), play(), pause(), export(), destroy() }`. `settings` is `{ title, speaker, handle, cover, background, logo, music, musicVolume, links, layout, visual, theme }`, where `cover`, `background` and `logo` are the pictures the user opened (a `Blob`) or the addresses they were given, and `theme` is an index into `THEMES` or the theme itself, so a page can keep a look and start the next clip with it. `source` is the recording on show, as it was opened (a `Blob`) or given. `readAudio(start, end, sampleRate)` reads one channel of the open recording at any rate, from the file as needed, so a page can work on an hour of audio without holding it all. `slots` holds three empty elements for a page's own controls: `header` after Open audio, `actions` before Download, and `captions` at the top of the Captions panel.
+`audiogram()` returns `{ element, captions, range, duration, parts, settings, source, slots, load(audio), readAudio(start, end, sampleRate), selectTab(tab), setFonts(fonts), setImages(images), setParts(parts), setCaptions(cues), setRange(start, end), setOverlay(overlay), play(), pause(), export(), destroy() }`. `settings` is `{ title, speaker, handle, cover, background, logo, music, musicVolume, links, layout, visual, theme, layers, images }`, where `cover`, `background` and `logo` are the pictures the user opened (a `Blob`) or the addresses they were given, and `theme` is an index into `THEMES` or the theme itself, so a page can keep a look and start the next clip with it. `source` is the recording on show, as it was opened (a `Blob`) or given. `readAudio(start, end, sampleRate)` reads one channel of the open recording at any rate, from the file as needed, so a page can work on an hour of audio without holding it all. `slots` holds three empty elements for a page's own controls: `header` after Open audio, `actions` before Download, and `captions` at the top of the Captions panel.
 
-The parts work without the editor too. `openSource(file)` opens a recording for reading a stretch at a time, with its outline filling in as it goes, and `indexMp3(bytes)` finds every frame of an MP3. `Painter` draws any frame of a clip onto a canvas, `exportClip(scene)` makes the video, `mux(tracks)` writes an MP4 from encoded H.264 and AAC, and the captions helpers (`parseSubtitles`, `toSRT`, `toVTT`, `spread`, `paginate`, `markStart`, `clip`) take plain arrays.
+The parts work without the editor too. `defaultLayers(shape)` gives the classic layout as layers, and `layerAt`, `snapMove`, `resizeTurned` and `rotateLayer` do the geometry of editing them. `openSource(file)` opens a recording for reading a stretch at a time, with its outline filling in as it goes, and `indexMp3(bytes)` finds every frame of an MP3. `Painter` draws any frame of a clip onto a canvas, `exportClip(scene)` makes the video, `mux(tracks)` writes an MP4 from encoded H.264 and AAC, and the captions helpers (`parseSubtitles`, `toSRT`, `toVTT`, `spread`, `paginate`, `markStart`, `clip`) take plain arrays.
 
 ## Keyboard
 
@@ -84,7 +88,11 @@ The parts work without the editor too. `openSource(file)` opens a recording for 
 | Left, Right on a clip edge or the playhead | Move it a tenth of a second; with Shift, a second |
 | Ctrl or Cmd with the wheel over the waveform | Zoom in and out about the pointer |
 | Shift with the wheel, or a sideways swipe | Move along the recording |
-| Arrows in the tools | Move between Design, Text, Photos, Music and Captions |
+| Arrows in the tools | Move between Design, Elements, Text, Photos, Music and Captions |
+| Arrows on the picture | Move the selected part a pixel; with Shift, ten |
+| Enter, Delete, Escape on the picture | Type into the selected words, delete or hide the part, let it go |
+| Ctrl or Cmd with D | Duplicate the selected part |
+| Ctrl or Cmd with Z, with Shift (or Y) | Undo, redo |
 | Arrows in a choice | Move along it and choose |
 
 ## Theming

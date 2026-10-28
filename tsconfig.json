@@ -31,6 +31,8 @@
     "mp3.ts",
     "source.ts",
     "view.ts",
-    "ui.ts"
+    "ui.ts",
+    "layers.ts",
+    "stage.ts"
   ]
 }

@@ -4,6 +4,7 @@ import { fft, peaks, rms, spectrum, Smoother } from "../dist/wave.js";
 import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, parseTime, spread, timeWords, toSRT, toVTT } from "../dist/captions.js";
 import { mux } from "../dist/mp4.js";
 import { Painter, SIZES, THEMES } from "../dist/render.js";
+import { defaultLayers } from "../dist/layers.js";
 
 const close = (actual, expected, tolerance = 1e-6, message) => assert.ok(Math.abs(actual - expected) <= tolerance, message ?? `${actual} ≉ ${expected}`);
 
@@ -278,7 +279,10 @@ test("a 9:16 story is 1080 by 1920, and its name, visual and captions stack down
   const cue = { start: 0, end: 5, text: "Ship small and ship often" };
   new Painter({ ...sceneFor(undefined), layout: "story", title: "A title", captions: [cue] }).paint(ctx, 1);
   const at = (text) => calls.find((call) => call.op === "fillText" && call.text.includes(text));
-  assert.ok(at("drk") && at("A title") && at("Ship"), calls.filter((call) => call.op === "fillText").map((call) => call.text).join(" | "));
-  assert.ok(at("drk").y < at("A title").y && at("A title").y < at("0:01 / 0:06").y && at("0:01 / 0:06").y < at("Ship").y);
-  assert.ok(at("Ship").y < 1920 - 1080 * 0.074);
+  assert.ok(at("drk") && at("A title") && at("0:01 / 0:06") && at("Ship"), calls.filter((call) => call.op === "fillText").map((call) => call.text).join(" | "));
+  // Each part is drawn in its own layer's frame; the layers themselves stack down the frame.
+  const top = (kind) => defaultLayers("story").find((layer) => layer.kind === kind).y;
+  assert.ok(top("name") < top("title") && top("title") < top("time") && top("time") < top("captions"));
+  const captions = defaultLayers("story").find((layer) => layer.kind === "captions");
+  assert.ok((captions.y + captions.h) * 1920 < 1920 - 1080 * 0.074);
 });

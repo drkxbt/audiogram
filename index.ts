@@ -6,6 +6,8 @@ export { clipTimeAt, joinParts, partsLength, recordingTimeAt, stitch, stitchCues
 export { OUTLINE_RATE, openSource, type AudioSource, type SourceOptions } from "./source.js";
 export { frameSpan, indexMp3, parseWav, wavHeader, type FrameSpan, type Mp3Index, type WavInfo } from "./mp3.js";
 export { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
-export { Painter, SIZES, THEMES, wrap, type Layout, type Overlay, type OverlayFrame, type Scene, type Theme, type Visual } from "./render.js";
+export { fontOf, paintOf, Painter, SIZES, textHeight, THEMES, wrap, type Layout, type Overlay, type OverlayFrame, type Scene, type Theme, type Visual } from "./render.js";
+export { defaultLayers, FRAME_SIZES, layerAt, moveLayer, resizeLayer, resizeTurned, rotateLayer, snapMove, type Box, type Guide, type Handle, type Layer, type LayerKind, type Paint } from "./layers.js";
+export { createStage, type FontChoice, type Stage, type StageHost, type StageLabels } from "./stage.js";
 export { canExportMp4, exportClip, type ExportOptions, type ExportResult } from "./export.js";
 export { audiogram, type Editor, type EditorOptions, type Labels, type Settings, type Tab } from "./editor.js";

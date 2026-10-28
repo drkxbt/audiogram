@@ -1,16 +1,12 @@
 import { cueAt, timeWords, type Cue } from "./captions.js";
+import { defaultLayers, FRAME_SIZES, type Layer, type Paint } from "./layers.js";
 import { rms, Smoother, spectrum } from "./wave.js";
 
 export type Layout = "square" | "portrait" | "story" | "landscape";
 export type Visual = "bars" | "wave" | "pulse";
 
 /** Video sizes: square and 4:5 for feeds, 9:16 for TikTok, Reels and Shorts, 16:9 for YouTube and LinkedIn. */
-export const SIZES: Record<Layout, { width: number; height: number }> = {
-  square: { width: 1080, height: 1080 },
-  portrait: { width: 1080, height: 1350 },
-  story: { width: 1080, height: 1920 },
-  landscape: { width: 1920, height: 1080 },
-};
+export const SIZES: Record<Layout, { width: number; height: number }> = FRAME_SIZES;
 
 export interface Theme {
   name: string;
@@ -56,6 +52,10 @@ export interface Scene {
   music?: { samples: Float32Array; gain: number } | null;
   /** Where to find the speaker, up to three, written small along the bottom. */
   links?: string[];
+  /** The frame as layers, bottom first; the classic layout for the shape when left out. */
+  layers?: Layer[];
+  /** The pictures image layers show, by key. */
+  images?: Map<string, CanvasImageSource>;
 }
 
 /** Where a frame is, for an overlay: seconds into the clip, the canvas's size, and one design pixel at this size. */
@@ -78,37 +78,7 @@ interface Box {
   height: number;
 }
 
-/** Where each part of the frame goes, for each shape of video. */
-function arrange(layout: Layout, width: number, height: number) {
-  const pad = Math.round(Math.min(width, height) * 0.074);
-  if (layout === "landscape") {
-    const left = { x: pad, y: pad, width: width * 0.36, height: height - pad * 2 };
-    const rightX = left.x + left.width + pad;
-    const right = { x: rightX, y: pad, width: width - rightX - pad, height: height - pad * 2 };
-    return {
-      pad,
-      header: { ...left, height: left.height * 0.62 },
-      visual: { ...right, height: right.height * 0.42 },
-      captions: { ...right, y: right.y + right.height * 0.48, height: right.height * 0.44 },
-      footer: { x: pad, y: height - pad * 0.6, width: width - pad * 2 },
-      stacked: false,
-    };
-  }
-  const inner = width - pad * 2;
-  const headerHeight = height * (layout === "story" ? 0.2 : layout === "portrait" ? 0.24 : 0.25);
-  const visualHeight = height * (layout === "story" ? 0.2 : layout === "portrait" ? 0.26 : 0.22);
-  const header = { x: pad, y: pad, width: inner, height: headerHeight };
-  const visual = { x: pad, y: header.y + headerHeight + pad * 0.4, width: inner, height: visualHeight };
-  const captionsTop = visual.y + visualHeight + pad * 0.5;
-  return {
-    pad,
-    header,
-    visual,
-    captions: { x: pad, y: captionsTop, width: inner, height: height - captionsTop - pad * 1.4 },
-    footer: { x: pad, y: height - pad * 0.68, width: inner },
-    stacked: true,
-  };
-}
+const FONT = "Geist, ui-sans-serif, system-ui, sans-serif";
 
 /** Whole seconds as m:ss. */
 function clock(seconds: number): string {
@@ -150,25 +120,64 @@ function sizeOf(source: CanvasImageSource): { width: number; height: number } {
 }
 
 /** Draws a picture over a whole box, filling it the way object-fit: cover does. */
-function drawCover(ctx: CanvasRenderingContext2D, image: CanvasImageSource, width: number, height: number) {
+function drawCover(ctx: CanvasRenderingContext2D, image: CanvasImageSource, box: Box) {
   const size = sizeOf(image);
   if (!size.width || !size.height) return;
-  const scale = Math.max(width / size.width, height / size.height);
-  ctx.drawImage(image, (width - size.width * scale) / 2, (height - size.height * scale) / 2, size.width * scale, size.height * scale);
+  const scale = Math.max(box.width / size.width, box.height / size.height);
+  const width = size.width * scale;
+  const height = size.height * scale;
+  ctx.drawImage(image, box.x + (box.width - width) / 2, box.y + (box.height - height) / 2, width, height);
 }
 
 /** Draws a picture into a circle, filling it the way object-fit: cover does. */
 function drawCircle(ctx: CanvasRenderingContext2D, image: CanvasImageSource, cx: number, cy: number, radius: number) {
-  const { width, height } = sizeOf(image);
-  if (!width || !height) return;
-  const scale = (radius * 2) / Math.min(width, height);
   ctx.save();
   ctx.beginPath();
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.clip();
-  ctx.drawImage(image, cx - (width * scale) / 2, cy - (height * scale) / 2, width * scale, height * scale);
+  drawCover(ctx, image, { x: cx - radius, y: cy - radius, width: radius * 2, height: radius * 2 });
   ctx.restore();
 }
+
+/** A layer's colour as CSS: one of the theme's by name, or its own. */
+export function paintOf(paint: Paint | undefined, theme: Theme, fallback: "text" | "muted" | "accent"): string {
+  const key = paint ?? fallback;
+  return key === "text" || key === "muted" || key === "accent" || key === "onAccent" || key === "background" ? theme[key] : key;
+}
+
+/** The canvas font for a text layer, its own family first and the scene's after it. */
+export function fontOf(layer: Layer, family: string, unit: number, weight = 400): string {
+  const size = Math.round((layer.size ?? 40) * unit);
+  return `${layer.italic ? "italic " : ""}${layer.weight ?? weight} ${size}px ${layer.font ? `"${layer.font}", ${family}` : family}`;
+}
+
+/** Black or white, whichever reads better on a colour given as #rrggbb. */
+function inkOn(color: string): string {
+  const match = /^#?([0-9a-f]{6})$/i.exec(color.trim());
+  if (!match) return "#111111";
+  const value = parseInt(match[1], 16);
+  const channel = (shift: number) => {
+    const c = ((value >> shift) & 255) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const luminance = 0.2126 * channel(16) + 0.7152 * channel(8) + 0.0722 * channel(0);
+  return luminance > 0.4 ? "#111111" : "#ffffff";
+}
+
+/** The lines a text layer's words fall into at its width, a new line typed counting as one. */
+function textLines(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
+  return text.split("\n").flatMap((part) => (part.trim() ? wrap(ctx, part, width) : [""]));
+}
+
+/** How tall a text layer's words stand, as a share of the frame's height, at the frame's size. */
+export function textHeight(ctx: CanvasRenderingContext2D, layer: Layer, text: string, family: string, width: number, height: number): number {
+  const unit = Math.min(width, height) / 1080;
+  ctx.font = fontOf(layer, family, unit);
+  return (Math.max(1, textLines(ctx, text, layer.w * width).length) * (layer.size ?? 40) * unit * 1.15) / height;
+}
+
+// Layers drawn as one line, centred in their box; titles and free text wrap down from the top of theirs.
+const SINGLE_LINE = new Set(["name", "handle", "links", "time"]);
 
 /**
  * Paints frames of a clip. It keeps a little state from frame to frame, so the bars ease the way a meter does; paint
@@ -176,8 +185,12 @@ function drawCircle(ctx: CanvasRenderingContext2D, image: CanvasImageSource, cx:
  */
 export class Painter {
   private meter = new Smoother(0.55, 0.16);
+  /** The layers this painter draws, bottom first. */
+  readonly layers: Layer[];
 
-  constructor(public scene: Scene) {}
+  constructor(public scene: Scene) {
+    this.layers = scene.layers ?? defaultLayers(scene.layout);
+  }
 
   reset(): void {
     this.meter.reset();
@@ -192,8 +205,7 @@ export class Painter {
     const { width, height } = ctx.canvas;
     const scene = this.scene;
     const { theme } = scene;
-    const font = scene.font ?? "Geist, ui-sans-serif, system-ui, sans-serif";
-    const box = arrange(scene.layout, width, height);
+    const font = scene.font ?? FONT;
     const unit = Math.min(width, height) / 1080;
 
     const gradient = ctx.createLinearGradient(0, 0, 0, height);
@@ -202,7 +214,7 @@ export class Painter {
     ctx.fillStyle = gradient;
     ctx.fillRect(0, 0, width, height);
     if (scene.backdrop) {
-      drawCover(ctx, scene.backdrop, width, height);
+      drawCover(ctx, scene.backdrop, { x: 0, y: 0, width, height });
       // The theme's own colours over the picture, so the name, the visual and the captions read on any of them.
       ctx.globalAlpha = 0.74;
       ctx.fillStyle = gradient;
@@ -210,26 +222,16 @@ export class Painter {
       ctx.globalAlpha = 1;
     }
 
-    this.paintHeader(ctx, box.header, box.stacked, font, unit);
-    this.paintVisual(ctx, box.visual, time, font, unit);
-    this.paintCaptions(ctx, box.captions, time, font, unit);
-
-    const links = (scene.links ?? []).map((link) => link.trim()).filter(Boolean).slice(0, 3);
-    if (links.length) {
-      ctx.fillStyle = theme.muted;
-      ctx.font = `500 ${Math.round(28 * unit)}px ${font}`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(links.join("  ·  "), box.footer.x + box.footer.width / 2, box.footer.y, box.footer.width);
-    }
+    for (const layer of this.layers) if (!layer.hidden) this.paintLayer(ctx, layer, time, font, unit, width, height);
 
     // The logo keeps its shape inside the empty margin above the header, which every shape leaves.
+    const pad = Math.round(Math.min(width, height) * 0.074);
     const logoSize = scene.logo ? sizeOf(scene.logo) : null;
     if (scene.logo && logoSize?.width && logoSize.height) {
-      const scale = Math.min((box.pad * 0.6) / logoSize.height, (width * 0.3) / logoSize.width);
+      const scale = Math.min((pad * 0.6) / logoSize.height, (width * 0.3) / logoSize.width);
       const w = logoSize.width * scale;
       const h = logoSize.height * scale;
-      ctx.drawImage(scene.logo, box.pad, (box.pad - h) / 2, w, h);
+      ctx.drawImage(scene.logo, pad, (pad - h) / 2, w, h);
     }
 
     if (scene.overlay) {
@@ -239,39 +241,86 @@ export class Painter {
     }
   }
 
-  private paintHeader(ctx: CanvasRenderingContext2D, area: Box, stacked: boolean, font: string, unit: number) {
-    const { theme, cover, speaker, handle, title } = this.scene;
-    const radius = Math.round(84 * unit);
-    const cx = area.x + radius;
-    const cy = area.y + radius;
-    if (cover) drawCircle(ctx, cover, cx, cy, radius);
-    else {
-      ctx.fillStyle = theme.accent;
-      ctx.beginPath();
-      ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  /** One layer, drawn in its own frame: the origin at its centre, turned with it, faded by its opacity. */
+  private paintLayer(ctx: CanvasRenderingContext2D, layer: Layer, time: number, font: string, unit: number, width: number, height: number) {
+    const w = layer.w * width;
+    const h = layer.h * height;
+    const box = { x: -w / 2, y: -h / 2, width: w, height: h };
+    const { theme } = this.scene;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, Math.max(0, layer.opacity ?? 1));
+    ctx.translate((layer.x + layer.w / 2) * width, (layer.y + layer.h / 2) * height);
+    if (layer.rotation) ctx.rotate((layer.rotation * Math.PI) / 180);
+    if (layer.kind === "avatar") this.paintAvatar(ctx, box, font);
+    else if (layer.kind === "visual") this.paintVisual(ctx, box, time, paintOf(layer.color, theme, "accent"), unit);
+    else if (layer.kind === "captions") this.paintCaptions(ctx, box, time, layer, font, unit);
+    else if (layer.kind === "image") {
+      const image = this.scene.images?.get(layer.image ?? "");
+      if (image) {
+        if (layer.radius) {
+          roundRect(ctx, box.x, box.y, w, h, layer.radius * Math.min(w, h));
+          ctx.clip();
+        }
+        drawCover(ctx, image, box);
+      }
+    } else if (layer.kind === "shape") {
+      ctx.fillStyle = paintOf(layer.fill, theme, "accent");
+      if (layer.shape === "ellipse") {
+        ctx.beginPath();
+        ctx.ellipse(0, 0, w / 2, h / 2, 0, 0, Math.PI * 2);
+      } else roundRect(ctx, box.x, box.y, w, h, (layer.radius ?? 0) * Math.min(w, h));
       ctx.fill();
-      ctx.fillStyle = theme.onAccent;
-      ctx.font = `700 ${Math.round(radius * 0.9)}px ${font}`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText((speaker || handle || "?").replace(/^@/, "").charAt(0).toUpperCase(), cx, cy + radius * 0.04);
-    }
-    ctx.textAlign = "left";
-    ctx.textBaseline = "alphabetic";
-    const nameX = cx + radius + Math.round(32 * unit);
-    ctx.fillStyle = theme.text;
-    ctx.font = `650 ${Math.round(46 * unit)}px ${font}`;
-    ctx.fillText(speaker, nameX, cy - 6 * unit, area.x + area.width - nameX);
-    ctx.fillStyle = theme.muted;
-    ctx.font = `450 ${Math.round(36 * unit)}px ${font}`;
-    ctx.fillText(handle, nameX, cy + 44 * unit, area.x + area.width - nameX);
+    } else this.paintText(ctx, box, layer, this.textOf(layer, time), font, unit);
+    ctx.restore();
+  }
 
-    if (!title) return;
-    ctx.fillStyle = theme.text;
-    const size = Math.round((stacked ? 58 : 64) * unit);
-    ctx.font = `700 ${size}px ${font}`;
-    const lines = wrap(ctx, title, area.width).slice(0, stacked ? 2 : 4);
-    lines.forEach((line, index) => ctx.fillText(line, area.x, cy + radius + size * 1.35 + index * size * 1.12));
+  /** What a text layer says: the scene's own words for the built-in ones, its own for the rest. */
+  textOf(layer: Layer, time: number): string {
+    const scene = this.scene;
+    if (layer.kind === "name") return scene.speaker;
+    if (layer.kind === "handle") return scene.handle;
+    if (layer.kind === "title") return scene.title;
+    if (layer.kind === "links") return (scene.links ?? []).map((link) => link.trim()).filter(Boolean).slice(0, 3).join("  ·  ");
+    if (layer.kind === "time") return `${clock(Math.min(this.duration, Math.max(0, time)))} / ${clock(Math.round(this.duration))}`;
+    return layer.text ?? "";
+  }
+
+  private paintText(ctx: CanvasRenderingContext2D, box: Box, layer: Layer, text: string, font: string, unit: number) {
+    if (!text) return;
+    const quiet = layer.kind === "handle" || layer.kind === "links" || layer.kind === "time";
+    ctx.font = fontOf(layer, font, unit, layer.kind === "title" ? 700 : 400);
+    ctx.fillStyle = paintOf(layer.color, this.scene.theme, quiet ? "muted" : "text");
+    const align = layer.align ?? "left";
+    ctx.textAlign = align;
+    const x = align === "center" ? box.x + box.width / 2 : align === "right" ? box.x + box.width : box.x;
+    if (SINGLE_LINE.has(layer.kind)) {
+      ctx.textBaseline = "middle";
+      ctx.fillText(text, x, box.y + box.height / 2, box.width);
+      return;
+    }
+    ctx.textBaseline = "top";
+    const lineHeight = (layer.size ?? 40) * unit * 1.15;
+    let lines = textLines(ctx, text, box.width);
+    // A title keeps to the lines its box has room for; free text runs as long as it is.
+    if (layer.kind === "title") lines = lines.slice(0, Math.max(1, Math.floor(box.height / lineHeight + 0.05)));
+    lines.forEach((line, index) => ctx.fillText(line, x, box.y + index * lineHeight));
+  }
+
+  private paintAvatar(ctx: CanvasRenderingContext2D, box: Box, font: string) {
+    const { theme, cover, speaker, handle } = this.scene;
+    const radius = Math.min(box.width, box.height) / 2;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    if (cover) return drawCircle(ctx, cover, cx, cy, radius);
+    ctx.fillStyle = theme.accent;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = theme.onAccent;
+    ctx.font = `700 ${Math.round(radius * 0.9)}px ${font}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText((speaker || handle || "?").replace(/^@/, "").charAt(0).toUpperCase(), cx, cy + radius * 0.04);
   }
 
   private level(time: number, window = 0.05): number {
@@ -280,21 +329,12 @@ export class Painter {
     return Math.min(1, rms(samples, center - (window * sampleRate) / 2, center + (window * sampleRate) / 2) * 4.2);
   }
 
-  private paintVisual(ctx: CanvasRenderingContext2D, box: Box, time: number, font: string, unit: number) {
-    const { theme, visual, audio } = this.scene;
-    // The time takes a line under the visual: under the moving edge for the wave, centred under bars and pulse.
-    const labelSize = Math.round(26 * unit);
-    const area = { ...box, height: box.height - labelSize * 1.6 };
-    ctx.fillStyle = theme.muted;
-    ctx.font = `500 ${labelSize}px ${font}`;
-    ctx.textAlign = visual === "wave" ? "right" : "center";
-    ctx.textBaseline = "alphabetic";
-    const elapsed = Math.min(this.duration, Math.max(0, time));
-    ctx.fillText(`${clock(elapsed)} / ${clock(Math.round(this.duration))}`, visual === "wave" ? area.x + area.width : area.x + area.width / 2, box.y + box.height - labelSize * 0.2);
-
+  private paintVisual(ctx: CanvasRenderingContext2D, area: Box, time: number, color: string, unit: number) {
+    const { visual, audio } = this.scene;
+    const alpha = ctx.globalAlpha;
     const middle = area.y + area.height / 2;
-    ctx.fillStyle = theme.accent;
-    ctx.strokeStyle = theme.accent;
+    ctx.fillStyle = color;
+    ctx.strokeStyle = color;
 
     if (visual === "bars") {
       const count = 44;
@@ -332,9 +372,9 @@ export class Painter {
         ctx.lineTo(x, middle + (at < 0 ? 0 : this.level(at, 0.06)) * area.height * 0.46);
       }
       ctx.closePath();
-      ctx.globalAlpha = 0.9;
+      ctx.globalAlpha = alpha * 0.9;
       ctx.fill();
-      ctx.globalAlpha = 1;
+      ctx.globalAlpha = alpha;
       ctx.fillRect(area.x + area.width - 3 * unit, area.y + area.height * 0.08, 6 * unit, area.height * 0.84);
       return;
     }
@@ -344,18 +384,18 @@ export class Painter {
     const cx = area.x + area.width / 2;
     const base = area.height * 0.2;
     for (let ring = 3; ring >= 1; ring--) {
-      ctx.globalAlpha = 0.16 * ring;
+      ctx.globalAlpha = alpha * 0.16 * ring;
       ctx.beginPath();
       ctx.arc(cx, middle, base + level * area.height * 0.11 * ring, 0, Math.PI * 2);
       ctx.fill();
     }
-    ctx.globalAlpha = 1;
+    ctx.globalAlpha = alpha;
     ctx.beginPath();
     ctx.arc(cx, middle, base * 0.86, 0, Math.PI * 2);
     ctx.fill();
   }
 
-  private paintCaptions(ctx: CanvasRenderingContext2D, area: Box, time: number, font: string, unit: number) {
+  private paintCaptions(ctx: CanvasRenderingContext2D, area: Box, time: number, layer: Layer, font: string, unit: number) {
     const { captions, theme } = this.scene;
     // Between captions, the next one shows a moment before it is said, and the last one stays a moment after.
     let index = cueAt(captions, time);
@@ -364,8 +404,11 @@ export class Painter {
     if (index < 0) return;
     const cue = captions[index];
     const words = timeWords(cue);
-    const size = Math.round(this.scene.layout === "landscape" ? 60 * unit : 62 * unit);
-    ctx.font = `650 ${size}px ${font}`;
+    const size = Math.round((layer.size ?? 62) * unit);
+    const highlight = paintOf(layer.highlight, theme, "accent");
+    const onHighlight = layer.highlight && layer.highlight !== "accent" ? inkOn(highlight) : theme.onAccent;
+    const said = paintOf(layer.color, theme, "text");
+    ctx.font = fontOf(layer, font, unit, 650);
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
     const space = ctx.measureText(" ").width;
@@ -384,19 +427,20 @@ export class Painter {
     }
     const shown = lines.slice(0, Math.max(1, Math.floor(area.height / lineHeight)));
     const top = area.y + (area.height - shown.length * lineHeight) / 2 + lineHeight / 2;
+    const align = layer.align ?? "center";
     shown.forEach((line, row) => {
       const total = line.reduce((sum, word) => sum + word.width, 0) + space * (line.length - 1);
-      let x = this.scene.layout === "landscape" ? area.x : area.x + (area.width - total) / 2;
+      let x = align === "left" ? area.x : align === "right" ? area.x + area.width - total : area.x + (area.width - total) / 2;
       const y = top + row * lineHeight;
       for (const word of line) {
-        const said = time >= word.end;
+        const done = time >= word.end;
         const saying = time >= word.start && time < word.end;
         if (saying) {
-          ctx.fillStyle = theme.accent;
+          ctx.fillStyle = highlight;
           roundRect(ctx, x - size * 0.14, y - size * 0.62, word.width + size * 0.28, size * 1.24, 10 * unit);
           ctx.fill();
         }
-        ctx.fillStyle = saying ? theme.onAccent : said ? theme.text : theme.muted;
+        ctx.fillStyle = saying ? onHighlight : done ? said : theme.muted;
         ctx.fillText(word.text, x, y);
         x += word.width + space;
       }

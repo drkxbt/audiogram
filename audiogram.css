@@ -280,6 +280,142 @@
 .ag[data-state="empty"] .ag-preview { visibility: hidden; }
 .ag[data-state="loading"] .ag-preview { opacity: 0.55; transition: opacity 200ms ease; }
 
+/* Free editing on the picture: the overlay over it, the selection with its handles, the guides it snaps to, the box
+   words are typed in, and the bar of what can be changed above the picture. */
+.ag-stage { padding-top: 64px; }
+.ag-overlay { position: absolute; z-index: 1; outline: none; touch-action: none; cursor: default; }
+.ag[data-state="empty"] .ag-overlay, .ag[data-tapping] .ag-overlay { pointer-events: none; }
+.ag-overlay:focus-visible { box-shadow: 0 0 0 2px var(--ag-stage), 0 0 0 4px var(--ag-text); border-radius: 6px; }
+.ag-hover, .ag-select { position: absolute; transform-origin: center; pointer-events: none; }
+.ag-hover { box-shadow: 0 0 0 1px rgb(127 127 127 / 0.7); border-radius: 2px; }
+.ag-select { box-shadow: 0 0 0 1.5px var(--ag-accent); border-radius: 2px; }
+.ag-grip, .ag-turn {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  margin: -6px 0 0 -6px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 0 0 1.5px var(--ag-accent), 0 1px 3px rgb(0 0 0 / 0.35);
+  pointer-events: auto;
+}
+.ag-grip-nw { left: 0; top: 0; cursor: nwse-resize; }
+.ag-grip-n { left: 50%; top: 0; cursor: ns-resize; }
+.ag-grip-ne { left: 100%; top: 0; cursor: nesw-resize; }
+.ag-grip-e { left: 100%; top: 50%; cursor: ew-resize; }
+.ag-grip-se { left: 100%; top: 100%; cursor: nwse-resize; }
+.ag-grip-s { left: 50%; top: 100%; cursor: ns-resize; }
+.ag-grip-sw { left: 0; top: 100%; cursor: nesw-resize; }
+.ag-grip-w { left: 0; top: 50%; cursor: ew-resize; }
+/* Side handles on words are pills, the way they read as "pull to widen". */
+.ag-select[data-words] .ag-grip-e, .ag-select[data-words] .ag-grip-w { width: 6px; height: 18px; margin: -9px 0 0 -3px; border-radius: 3px; }
+.ag-select[data-words] .ag-grip-n, .ag-select[data-words] .ag-grip-s { display: none; }
+.ag-turn { left: 50%; top: -28px; cursor: grab; }
+.ag-turn::after { content: ""; position: absolute; left: 50%; top: 12px; width: 1.5px; height: 14px; translate: -50% 0; background: var(--ag-accent); }
+.ag-guides { position: absolute; inset: 0; pointer-events: none; }
+.ag-guide { position: absolute; background: #ff4fa3; }
+.ag-guide-x { top: 0; bottom: 0; width: 1px; margin-left: -0.5px; }
+.ag-guide-y { left: 0; right: 0; height: 1px; margin-top: -0.5px; }
+.ag-type {
+  position: absolute;
+  z-index: 2;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  outline: 1.5px dashed var(--ag-accent);
+  outline-offset: 2px;
+  line-height: 1.15;
+  resize: none;
+  transform-origin: center;
+}
+
+.ag-context {
+  position: absolute;
+  top: 12px;
+  right: 0;
+  left: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
+  max-width: calc(100% - 24px);
+  margin: 0 auto;
+  padding: 4px;
+  border-radius: 10px;
+  background: var(--ag-bg);
+  box-shadow: 0 0 0 1px var(--ag-line), 0 6px 18px -8px rgb(0 0 0 / 0.45);
+}
+.ag-context .ag-key { height: 32px; padding: 0 10px 0 8px; font-size: 12.5px; }
+.ag-context .ag-key svg { width: 16px; height: 16px; }
+.ag-context .ag-btn { width: 32px; height: 32px; }
+.ag-font-key .ag-key-text { max-width: 130px; overflow: hidden; text-overflow: ellipsis; }
+.ag-size { display: inline-flex; align-items: center; gap: 2px; }
+.ag-size-input { width: 48px; height: 32px; padding: 0 4px; text-align: center; font-variant-numeric: tabular-nums; -moz-appearance: textfield; }
+.ag-size-input::-webkit-inner-spin-button, .ag-size-input::-webkit-outer-spin-button { margin: 0; -webkit-appearance: none; }
+.ag-glyph { color: var(--ag-text); font: 700 15px/1 Georgia, "Times New Roman", serif; }
+.ag-italic { font-style: italic; font-weight: 400; }
+.ag-glyph[aria-pressed="true"] { background: var(--ag-surface); box-shadow: inset 0 0 0 1.5px var(--ag-accent); }
+.ag-swatch-key { display: inline-grid; place-items: center; width: 32px; height: 32px; padding: 0; border: 0; border-radius: 8px; background: none; cursor: pointer; }
+.ag-swatch-key .ag-dot { width: 20px; height: 20px; }
+.ag-swatch-key:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; }
+@media (hover: hover) {
+  .ag-swatch-key:hover { background: var(--ag-surface); }
+}
+/* The highlight swatch is square-ish, like a marked word. */
+.ag-highlight-key .ag-dot { border-radius: 4px; }
+
+.ag-pop {
+  position: absolute;
+  z-index: 4;
+  display: grid;
+  gap: 8px;
+  width: max-content;
+  max-width: min(320px, calc(100% - 16px));
+  padding: 10px;
+  border-radius: 10px;
+  background: var(--ag-bg);
+  box-shadow: 0 0 0 1px var(--ag-line), 0 12px 32px -10px rgb(0 0 0 / 0.55);
+}
+.ag-pop-name { margin: 2px 0 -2px; color: var(--ag-muted); font-size: 11.5px; font-weight: 600; }
+.ag-swatch-row { display: grid; grid-template-columns: repeat(6, 32px); gap: 2px; }
+.ag-custom-colour { display: flex; align-items: center; gap: 8px; color: var(--ag-muted); font-size: 12.5px; cursor: pointer; }
+.ag-custom-colour input { width: 32px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; cursor: pointer; }
+.ag-pop-actions { display: grid; gap: 4px; }
+.ag-pop-actions .ag-key { justify-content: flex-start; height: 32px; font-size: 12.5px; }
+.ag-font-list { display: grid; gap: 1px; width: 240px; max-height: min(360px, 60vh); overflow-y: auto; overscroll-behavior: contain; }
+.ag-font-item { padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--ag-text); font-size: 17px; text-align: left; cursor: pointer; }
+.ag-font-item[aria-selected="true"] { background: var(--ag-surface); box-shadow: inset 0 0 0 1.5px var(--ag-accent); }
+@media (hover: hover) {
+  .ag-font-item:hover { background: var(--ag-surface); }
+}
+.ag-font-item:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; }
+
+/* Text to add, each button set in the size it adds. */
+.ag-text-presets { display: grid; gap: 6px; }
+.ag-text-preset { padding: 10px 12px; border: 0; border-radius: 8px; background: var(--ag-surface); color: var(--ag-text); font: inherit; text-align: left; cursor: pointer; transition: background-color 120ms ease; }
+.ag-text-heading { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; }
+.ag-text-subheading { font-size: 15px; font-weight: 650; }
+.ag-text-body { font-size: 13px; }
+@media (hover: hover) {
+  .ag-text-preset:hover { background: var(--ag-field); }
+}
+.ag-text-preset:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
+
+/* The user's pictures, three to a row, each one a key that places it. */
+.ag-upload, .ag-reset { justify-self: start; align-self: flex-start; }
+.ag-uploads { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.ag-uploads:empty { display: none; }
+.ag-upload-item { position: relative; }
+.ag-upload-add { display: block; width: 100%; aspect-ratio: 1; padding: 0; overflow: hidden; border: 0; border-radius: 8px; background: var(--ag-surface); cursor: pointer; }
+.ag-upload-add img { width: 100%; height: 100%; object-fit: cover; }
+.ag-upload-add:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
+.ag-upload-forget { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; background: rgb(0 0 0 / 0.55); color: #fff; }
+.ag-upload-forget svg { width: 13px; height: 13px; }
+
 /* The recording. */
 
 .ag-timeline { display: grid; gap: 8px; padding: 9px 12px 12px; border-top: 1px solid var(--ag-line); }
@@ -420,7 +556,7 @@
   .ag-stage { contain: none; }
   .ag-body { display: contents; }
   .ag-header { order: 0; padding: 8px 10px; }
-  .ag-stage { order: 1; padding: 12px; }
+  .ag-stage { order: 1; padding: 60px 12px 12px; }
   .ag-preview { max-height: 52vh; }
   .ag-timeline { order: 2; padding: 8px 10px 10px; }
   .ag-parts { order: 3; padding: 0 10px 10px; }
