@@ -27,6 +27,10 @@
     "export.ts",
     "editor.ts",
     "parts.ts",
-    "mix.ts"
+    "mix.ts",
+    "mp3.ts",
+    "source.ts",
+    "view.ts",
+    "ui.ts"
   ]
 }

@@ -1,11 +1,16 @@
 import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, spread, toSRT, type Cue } from "./captions.js";
 import { exportClip, type ExportResult } from "./export.js";
+import { clipTimeAt, joinParts, partsLength, stitchCues } from "./parts.js";
 import { Painter, SIZES, THEMES, type Layout, type Overlay, type Scene, type Theme, type Visual } from "./render.js";
-import { clipTimeAt, partsLength, stitch, stitchCues } from "./parts.js";
-import { peaks } from "./wave.js";
+import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
+import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
+import { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
+
+export type Tab = "design" | "text" | "photos" | "music" | "captions";
 
 export interface Labels {
   editor: string;
+  tools: string;
   open: string;
   play: string;
   pause: string;
@@ -13,48 +18,72 @@ export interface Labels {
   exporting: (percent: number) => string;
   exported: (seconds: number) => string;
   failed: string;
+  openFailed: string;
+  pictureFailed: string;
+  musicFailed: string;
   timeline: string;
+  overview: string;
   playhead: string;
+  clipStart: string;
+  clipEnd: string;
+  zoom: string;
+  zoomIn: string;
+  zoomOut: string;
+  fit: string;
+  whole: string;
+  reading: (done: string, total: string) => string;
   addPart: string;
+  addPartHint: string;
   partsFull: string;
   parts: string;
   part: (index: number, from: string, to: string) => string;
   removePart: (index: number) => string;
-  clipStart: string;
-  clipEnd: string;
+  tabs: Record<Tab, string>;
+  shape: string;
   layouts: Record<Layout, string>;
+  visual: string;
   visuals: Record<Visual, string>;
+  colours: string;
   theme: (name: string) => string;
   title: string;
   speaker: string;
   handle: string;
-  cover: string;
-  background: string;
-  backgroundOff: string;
   links: string;
   link: (index: number) => string;
   linkHints: string[];
+  cover: string;
+  background: string;
+  choose: string;
+  replace: string;
+  remove: string;
+  none: string;
   music: string;
-  musicOff: string;
   musicVolume: string;
   captions: string;
   tap: string;
+  tapTitle: string;
   tapNext: (text: string) => string;
-  transcript: string;
-  spread: string;
-  importCaptions: string;
-  downloadCaptions: string;
   addCaption: string;
+  importCaptions: string;
+  importTitle: string;
+  downloadCaptions: string;
+  downloadTitle: string;
   removeCaption: string;
   seek: (time: string) => string;
   captionText: string;
-  drop: string;
+  noCaptions: string;
+  page: (from: number, to: number, total: number) => string;
+  earlier: string;
+  later: string;
+  transcript: string;
+  transcriptHelp: string;
+  spread: string;
   loading: string;
   empty: string;
 }
 
 export interface EditorOptions {
-  /** An address or a file of any audio the browser can decode. */
+  /** An address or a file of any audio the browser can play. An MP3 or a WAV can be any length. */
   audio?: string | Blob;
   /** Captions for the whole recording, in seconds from its start. */
   captions?: Cue[];
@@ -118,6 +147,8 @@ export interface Editor {
   readonly element: HTMLElement;
   readonly captions: Cue[];
   readonly range: [number, number];
+  /** The open recording's length in seconds; 0 before one is open. */
+  readonly duration: number;
   load(audio: string | Blob): Promise<void>;
   setCaptions(cues: Cue[]): void;
   setRange(start: number, end: number): void;
@@ -130,126 +161,114 @@ export interface Editor {
   setParts(parts: Array<[number, number]>): void;
   /** The recording on show, as it was opened or given; null before one is. */
   readonly source: string | Blob | null;
-  /** The recording as the editor decoded it, one channel at 48 kHz, for a page to work on without decoding it again. */
-  readonly audio: { samples: Float32Array; sampleRate: number } | null;
+  /** One channel of the open recording from `start` to `end` seconds at `sampleRate`, read from the file as needed. */
+  readAudio(start: number, end: number, sampleRate: number): Promise<Float32Array>;
   setOverlay(overlay: Overlay | null): void;
-  /** Places for a page's own keys and words: beside the captions heading, a line under it, and before the export key. */
-  readonly slots: { captions: HTMLElement; note: HTMLElement; timeline: HTMLElement };
+  /** Opens one of the tools, as pressing its tab does. */
+  selectTab(tab: Tab): void;
+  /** Places for a page's own controls: in the header after Open audio, in the header before Download, and at the top of the Captions tab. */
+  readonly slots: { header: HTMLElement; actions: HTMLElement; captions: HTMLElement };
   destroy(): void;
 }
 
 const DEFAULT_LABELS: Labels = {
   editor: "Clip maker",
-  open: "Open an audio file",
-  play: "Play the clip",
+  tools: "Tools",
+  open: "Open audio",
+  play: "Play",
   pause: "Pause",
-  export: "Export the video",
+  export: "Download",
   exporting: (percent) => `Making the video, ${percent}%`,
   exported: (seconds) => `The video is ready: ${formatTime(seconds)} long.`,
-  failed: "The video couldn't be made in this browser.",
-  addPart: "Add this stretch as a part of the clip",
-  partsFull: "The parts already fill the longest clip",
-  parts: "Parts of the clip, in order",
-  part: (index, from, to) => `Part ${index}, ${from} to ${to}`,
-  removePart: (index) => `Remove part ${index}`,
+  failed: "The video couldn't be made in this browser. Try Chrome, Edge or Safari.",
+  openFailed: "This recording couldn't be opened. Save it as an MP3 or WAV and try again.",
+  pictureFailed: "This picture couldn't be opened. Try a JPG, PNG or WebP.",
+  musicFailed: "This track couldn't be opened. Try an MP3 or WAV.",
   timeline: "The recording",
+  overview: "The whole recording",
   playhead: "Play from",
   clipStart: "Clip start",
   clipEnd: "Clip end",
-  layouts: { square: "Square, 1:1", portrait: "Tall, 4:5", landscape: "Wide, 16:9" },
+  zoom: "Zoom",
+  zoomIn: "Zoom in",
+  zoomOut: "Zoom out",
+  fit: "Fit",
+  whole: "Show the whole recording",
+  reading: (done, total) => `Loading waveform · ${done} of ${total}`,
+  addPart: "Add to clip",
+  addPartHint: "Keep this moment in the clip, then select another. They play back to back.",
+  partsFull: "The clip is already as long as it can be.",
+  parts: "Parts of the clip, in order",
+  part: (index, from, to) => `Part ${index}, ${from} to ${to}`,
+  removePart: (index) => `Remove part ${index}`,
+  tabs: { design: "Design", text: "Text", photos: "Photos", music: "Music", captions: "Captions" },
+  shape: "Shape",
+  layouts: { square: "Square", portrait: "Portrait", story: "Story", landscape: "Wide" },
+  visual: "Animation",
   visuals: { bars: "Bars", wave: "Wave", pulse: "Pulse" },
+  colours: "Colours",
   theme: (name) => `${name} colours`,
   title: "Title",
   speaker: "Name",
   handle: "Handle",
-  cover: "Choose a cover picture",
-  background: "Choose a background picture",
-  backgroundOff: "Remove the background picture",
   links: "Links",
   link: (index) => `Link ${index}`,
   linkHints: ["yoursite.com", "x.com/you", "youtube.com/@you"],
-  music: "Add background music",
-  musicOff: "Remove the background music",
-  musicVolume: "Music volume",
+  cover: "Profile picture",
+  background: "Background picture",
+  choose: "Choose",
+  replace: "Replace",
+  remove: "Remove",
+  none: "None yet",
+  music: "Background music",
+  musicVolume: "Volume",
   captions: "Captions",
-  tap: "Time the captions by tapping",
+  tap: "Tap to time",
+  tapTitle: "Play the clip and tap the picture as each caption starts",
   tapNext: (text) => `Tap the picture when this starts: ${text}`,
-  transcript: "Paste a transcript, one caption to a line",
-  spread: "Spread the transcript over the clip",
-  importCaptions: "Open captions from an SRT or VTT file",
-  downloadCaptions: "Download the clip's captions as SRT",
-  addCaption: "Add a caption at the playhead",
+  addCaption: "Add caption",
+  importCaptions: "Open captions",
+  importTitle: "Open an SRT or VTT file",
+  downloadCaptions: "Save captions",
+  downloadTitle: "Download this clip's captions as an SRT file",
   removeCaption: "Remove this caption",
   seek: (time) => `Go to ${time}`,
   captionText: "Caption",
-  drop: "Drop an audio file here",
-  loading: "Reading the audio",
+  noCaptions: "No captions in this clip yet.",
+  page: (from, to, total) => `${from}–${to} of ${total}`,
+  earlier: "Earlier captions",
+  later: "Later captions",
+  transcript: "Paste a transcript",
+  transcriptHelp: "Put one caption on each line. Each line gets as long as it takes to say, and together they replace the captions in the selected stretch.",
+  spread: "Use as captions",
+  loading: "Opening the recording",
   empty: "Open a recording of a Space, a podcast or a voice note to start.",
 };
 
-const ICONS: Record<string, string> = {
-  open: '<path d="M4 7.5V18a1.5 1.5 0 0 0 1.5 1.5h13A1.5 1.5 0 0 0 20 18V9.5A1.5 1.5 0 0 0 18.5 8H12l-2-2.5H5.5A1.5 1.5 0 0 0 4 7Z"/>',
-  play: '<path class="fill" d="M8 5.5v13l10.5-6.5Z"/>',
-  pause: '<rect class="fill" x="6.5" y="5" width="4" height="14" rx="1"/><rect class="fill" x="13.5" y="5" width="4" height="14" rx="1"/>',
-  export: '<path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14v4.5A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5V14"/>',
-  square: '<rect x="5" y="5" width="14" height="14" rx="1.5"/>',
-  portrait: '<rect x="6.5" y="3.5" width="11" height="17" rx="1.5"/>',
-  landscape: '<rect x="3" y="6.5" width="18" height="11" rx="1.5"/>',
-  bars: '<path d="M5 10v4M8.5 7v10M12 4.5v15M15.5 7v10M19 10v4"/>',
-  wave: '<path d="M3 12c2 0 2-5 4-5s2 10 4 10 2-13 4-13 2 8 4 8h2"/>',
-  pulse: '<circle cx="12" cy="12" r="3.5"/><circle cx="12" cy="12" r="7.5" opacity=".55"/>',
-  cover: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="m20.5 16-5-5-8 8.5"/>',
-  background: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="m3.5 15.5 4.5-4.5 4 4 3-3 5.5 5.5"/><path d="M15.5 9.5h.01"/>',
-  music: '<path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',
-  tap: '<path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0v4.5a6 6 0 0 1-6 6h-.6a5 5 0 0 1-3.9-1.9L4.8 15a1.5 1.5 0 0 1 2.3-1.9L9 15"/>',
-  spread: '<path d="M4 6h16M4 12h10M4 18h13"/>',
-  file: '<path d="M6 4.5h8l4 4V19a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 6 19ZM14 4.5V9h4"/><path d="M9 13h6M9 16h4"/>',
-  save: '<path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/>',
-  add: '<path d="M12 5v14M5 12h14"/>',
-  remove: '<path d="M6.5 6.5l11 11m0-11-11 11"/>',
-  addPart: '<path d="M4 7h11M4 12h11M4 17h7M18.5 14v7M15 17.5h7"/>',
-};
+const TABS: Tab[] = ["design", "text", "photos", "music", "captions"];
+const TAB_ICONS: Record<Tab, string> = { design: ICONS.design, text: ICONS.text, photos: ICONS.photo, music: ICONS.music, captions: ICONS.captions };
+const RATIOS: Record<Layout, string> = { square: "1:1", portrait: "4:5", story: "9:16", landscape: "16:9" };
 
 const MIN_LENGTH = 1;
+const SAMPLE_RATE = 48000;
+const SILENCE = new Float32Array(1);
+// The waveform's zoom keys show only for recordings long enough to need them.
+const ZOOMABLE = 20;
+// The first stretch of music is all a clip can use; it loops under longer ones.
+const MUSIC_LENGTH = 180;
 
-function element<K extends keyof HTMLElementTagNameMap>(tag: K, className: string): HTMLElementTagNameMap[K] {
-  const node = document.createElement(tag);
-  node.className = className;
-  return node;
-}
-
-function icon(markup: string): SVGSVGElement {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("aria-hidden", "true");
-  svg.innerHTML = markup;
-  return svg;
-}
-
-/** A button with an icon only; its name is for screen readers and the tooltip. */
-function iconButton(className: string, label: string, markup: string): HTMLButtonElement {
-  const button = element("button", `ag-btn ${className}`);
-  button.type = "button";
-  button.setAttribute("aria-label", label);
-  button.title = label;
-  button.append(icon(markup));
-  return button;
-}
+let instances = 0;
 
 /** Captions on screen break into pages short enough for the shape of the video. */
 const pageLength = (layout: Layout) => (layout === "landscape" ? 46 : layout === "portrait" ? 34 : 32);
 
-async function decode(source: string | Blob): Promise<{ samples: Float32Array; sampleRate: number; url: string }> {
-  const blob = typeof source === "string" ? await (await fetch(source)).blob() : source;
-  const data = await blob.arrayBuffer();
-  // Decoded at 48 kHz, the rate the AAC encoder and most players expect, and mixed down to one channel.
-  const buffer = await new OfflineAudioContext(1, 1, 48000).decodeAudioData(data);
-  const samples = new Float32Array(buffer.length);
-  for (let channel = 0; channel < buffer.numberOfChannels; channel++) {
-    const part = buffer.getChannelData(channel);
-    for (let i = 0; i < part.length; i++) samples[i] += part[i] / buffer.numberOfChannels;
-  }
-  return { samples, sampleRate: buffer.sampleRate, url: URL.createObjectURL(blob) };
+/** A time as m:ss, or h:mm:ss from an hour. */
+function clock(seconds: number): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(whole / 3600);
+  const minutes = Math.floor((whole % 3600) / 60);
+  const secs = String(whole % 60).padStart(2, "0");
+  return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${secs}` : `${minutes}:${secs}`;
 }
 
 async function loadImage(source: string | Blob): Promise<HTMLImageElement> {
@@ -268,10 +287,15 @@ async function loadImage(source: string | Blob): Promise<HTMLImageElement> {
 export function audiogram(container: HTMLElement, options: EditorOptions = {}): Editor {
   const labels: Labels = { ...DEFAULT_LABELS, ...options.labels };
   const maxLength = options.maxLength ?? 140;
-  let recording: { samples: Float32Array; sampleRate: number; url: string; duration: number } | null = null;
+  const id = `ag${++instances}`;
+  let source: AudioSource | null = null;
+  let sourceInput: string | Blob | null = null;
+  // Bumped for each recording, so the clip's sound read from one is never taken for another's.
+  let generation = 0;
   let cues: Cue[] = [...(options.captions ?? [])].sort((a, b) => a.start - b.start);
   let range: [number, number] = options.range ?? [0, 0];
   let playhead = range[0];
+  let view: View = [0, 1];
   let layout: Layout = options.layout ?? "square";
   let visual: Visual = options.visual ?? "bars";
   let theme: Theme = typeof options.theme === "object" ? options.theme : THEMES[options.theme ?? 0] ?? THEMES[0];
@@ -284,18 +308,17 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let backdropSource: Blob | string | null = options.background ?? null;
   let logo: HTMLImageElement | null = null;
   const logoSource: Blob | string | null = options.logo ?? null;
-  let music: { samples: Float32Array; url: string; duration: number } | null = null;
+  let music: { samples: Float32Array; url: string; duration: number; close(): void } | null = null;
   let musicSource: Blob | string | null = options.music ?? null;
   let musicVolume = Math.min(1, Math.max(0, options.musicVolume ?? 0.25));
   const links = [0, 1, 2].map((index) => options.links?.[index] ?? "");
-  let source: string | Blob | null = null;
   let overlay: Overlay | null = options.overlay ?? null;
   // The clip is the parts, back to back, when there are any; otherwise the selected stretch alone.
   let parts: Array<[number, number]> = (options.parts ?? []).map(([start, end]) => [start, end]);
-  let stitched: { key: string; samples: Float32Array } | null = null;
   const spans = (): Array<[number, number]> => (parts.length ? parts : [range]);
   const clipLength = () => (parts.length ? partsLength(parts) : range[1] - range[0]);
   const clipTime = () => (parts.length ? clipTimeAt(parts, playhead) ?? 0 : playhead - range[0]);
+  const duration = () => source?.duration ?? 0;
   // The playhead stays inside the clip: on one of the parts, or in the selected stretch when there are none.
   const intoClip = (time: number) => {
     let nearest = time;
@@ -309,11 +332,71 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let tapping = false;
   let tapIndex = 0;
   let exporting = false;
+  let tab: Tab = "design";
+  // The range given with the options belongs to the first recording; another one opens at its own start.
+  let firstLoad = true;
 
-  // The frame: the picture, the panel of choices, and the recording along the bottom.
+  // The frame: a header with the main actions, the tools down the left, the picture, and the recording along the bottom.
   const root = element("div", "ag");
   root.setAttribute("role", "group");
   root.setAttribute("aria-label", labels.editor);
+  // The root answers its own width for the layout; the frame inside it is what lays out.
+  const shell = element("div", "ag-frame");
+  root.append(shell);
+
+  const header = element("div", "ag-header");
+  const openButton = keyButton("ag-open", labels.open, ICONS.open);
+  const audioInput = element("input", "ag-hidden");
+  audioInput.type = "file";
+  audioInput.accept = "audio/*,video/*,.mp3,.m4a,.wav";
+  audioInput.tabIndex = -1;
+  const headerSlot = element("div", "ag-slot");
+  const actionsSlot = element("div", "ag-slot");
+  const exportButton = keyButton("ag-export", labels.export, ICONS.export);
+  const meter = element("span", "ag-meter");
+  exportButton.append(meter);
+  header.append(openButton, audioInput, headerSlot, element("span", "ag-grow"), actionsSlot, exportButton);
+
+  const body = element("div", "ag-body");
+  const rail = element("div", "ag-rail");
+  rail.setAttribute("role", "tablist");
+  rail.setAttribute("aria-label", labels.tools);
+  rail.setAttribute("aria-orientation", "vertical");
+  const drawer = element("div", "ag-drawer");
+  const panes = {} as Record<Tab, HTMLElement>;
+  const tabButtons = TABS.map((name) => {
+    const button = element("button", "ag-tab");
+    button.type = "button";
+    button.id = `${id}-tab-${name}`;
+    button.setAttribute("role", "tab");
+    button.setAttribute("aria-controls", `${id}-pane-${name}`);
+    const text = element("span", "ag-tab-text");
+    text.textContent = labels.tabs[name];
+    button.append(icon(TAB_ICONS[name]), text);
+    button.addEventListener("click", () => selectTab(name));
+    const pane = element("section", "ag-pane");
+    pane.id = `${id}-pane-${name}`;
+    pane.setAttribute("role", "tabpanel");
+    pane.setAttribute("aria-labelledby", button.id);
+    panes[name] = pane;
+    drawer.append(pane);
+    return button;
+  });
+  rail.append(...tabButtons);
+  // Arrow keys move along the tools, as along any tab list.
+  rail.addEventListener("keydown", (event) => {
+    const at = tabButtons.indexOf(document.activeElement as HTMLButtonElement);
+    const last = tabButtons.length - 1;
+    const to = event.key === "Home" ? 0 : event.key === "End" ? last
+      : event.key === "ArrowDown" || event.key === "ArrowRight" ? (at + 1) % tabButtons.length
+        : event.key === "ArrowUp" || event.key === "ArrowLeft" ? (at + last) % tabButtons.length
+          : -1;
+    if (at < 0 || to < 0) return;
+    event.preventDefault();
+    const next = tabButtons[to];
+    next.focus();
+    next.click();
+  });
 
   const stage = element("div", "ag-stage");
   const preview = element("canvas", "ag-preview");
@@ -323,25 +406,45 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   tapHint.hidden = true;
   const emptyNote = element("p", "ag-empty");
   emptyNote.textContent = labels.empty;
-  stage.append(preview, tapHint, emptyNote);
+  const notice = element("p", "ag-notice");
+  notice.hidden = true;
+  stage.append(preview, tapHint, emptyNote, notice);
+  body.append(rail, drawer, stage);
 
-  const panel = element("div", "ag-panel");
-  const choice = (name: string, items: Array<{ value: string; label: string; markup?: string; swatch?: Theme }>, current: string, apply: (value: string) => void) => {
-    const group = element("div", "ag-choice");
+  const heading = (pane: HTMLElement, text: string) => {
+    const node = element("h3", "ag-heading");
+    node.id = `${pane.id}-${pane.childElementCount}`;
+    node.textContent = text;
+    pane.append(node);
+    return node;
+  };
+
+  // Design: the shape, the animation and the colours, each a row of tiles that say what they are.
+  const tiles = (pane: HTMLElement, name: string, items: Array<{ value: string; text: string; detail?: string; markup?: string; swatch?: Theme }>, current: string, apply: (value: string) => void) => {
+    const label = heading(pane, name);
+    const group = element("div", "ag-tiles");
     group.setAttribute("role", "radiogroup");
-    group.setAttribute("aria-label", name);
+    group.setAttribute("aria-labelledby", label.id);
+    group.style.setProperty("--ag-count", String(items.length));
     const buttons = items.map((item) => {
-      const button = item.markup ? iconButton("ag-pick", item.label, item.markup) : element("button", "ag-btn ag-swatch");
-      if (!item.markup) {
-        button.type = "button";
-        button.setAttribute("aria-label", item.label);
-        button.title = item.label;
+      const button = element("button", "ag-tile");
+      button.type = "button";
+      button.setAttribute("role", "radio");
+      button.dataset.value = item.value;
+      if (item.markup) button.append(icon(item.markup));
+      else {
         const dot = element("span", "ag-dot");
         dot.style.background = `linear-gradient(135deg, ${item.swatch!.background} 50%, ${item.swatch!.accent} 50%)`;
         button.append(dot);
       }
-      button.setAttribute("role", "radio");
-      button.dataset.value = item.value;
+      const text = element("span", "ag-tile-text");
+      text.textContent = item.text;
+      button.append(text);
+      if (item.detail) {
+        const detail = element("span", "ag-tile-detail");
+        detail.textContent = item.detail;
+        button.append(detail);
+      }
       button.addEventListener("click", () => {
         apply(item.value);
         mark(item.value);
@@ -365,103 +468,28 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     });
     group.append(...buttons);
     mark(current);
+    pane.append(group);
     return group;
   };
-  const layoutChoice = choice("Shape", (["square", "portrait", "landscape"] as Layout[]).map((value) => ({ value, label: labels.layouts[value], markup: ICONS[value] })), layout, (value) => {
+  tiles(panes.design, labels.shape, (["square", "portrait", "story", "landscape"] as Layout[]).map((value) => ({ value, text: labels.layouts[value], detail: RATIOS[value], markup: ICONS[value] })), layout, (value) => {
     layout = value as Layout;
     rebuild();
     changed();
   });
-  const visualChoice = choice("Visual", (["bars", "wave", "pulse"] as Visual[]).map((value) => ({ value, label: labels.visuals[value], markup: ICONS[value] })), visual, (value) => {
+  tiles(panes.design, labels.visual, (["bars", "wave", "pulse"] as Visual[]).map((value) => ({ value, text: labels.visuals[value], markup: ICONS[value] })), visual, (value) => {
     visual = value as Visual;
     rebuild();
     changed();
   });
-  const themeChoice = choice("Colours", THEMES.map((item, index) => ({ value: String(index), label: labels.theme(item.name), swatch: item })), String(Math.max(0, THEMES.indexOf(theme))), (value) => {
+  const themeTiles = tiles(panes.design, labels.colours, THEMES.map((item, index) => ({ value: String(index), text: item.name, swatch: item })), String(Math.max(0, THEMES.indexOf(theme))), (value) => {
     theme = THEMES[Number(value)];
     rebuild();
     changed();
   });
-  const looks = element("div", "ag-row");
-  const coverButton = iconButton("ag-cover", labels.cover, ICONS.cover);
-  const coverInput = element("input", "ag-hidden");
-  coverInput.type = "file";
-  coverInput.accept = "image/*";
-  coverInput.tabIndex = -1;
-  // The background picture and the music each take one key: it opens a file when there is none and removes it when
-  // there is one, pressed while it's on.
-  const pictureKey = (className: string, add: string, remove: string, markup: string, apply: (file: Blob | null) => Promise<void>, accept = "image/*") => {
-    const button = iconButton(className, add, markup);
-    const input = element("input", "ag-hidden");
-    input.type = "file";
-    input.accept = accept;
-    input.tabIndex = -1;
-    const mark = (on: boolean) => {
-      button.setAttribute("aria-pressed", String(on));
-      button.setAttribute("aria-label", on ? remove : add);
-      button.title = on ? remove : add;
-    };
-    button.addEventListener("click", async () => {
-      if (button.getAttribute("aria-pressed") === "true") {
-        await apply(null);
-        mark(false);
-      } else input.click();
-    });
-    input.addEventListener("change", async () => {
-      const file = input.files?.[0];
-      input.value = "";
-      if (!file) return;
-      await apply(file);
-      mark(true);
-    });
-    mark(false);
-    return { button, input, mark };
-  };
-  const backgroundKey = pictureKey("ag-background", labels.background, labels.backgroundOff, ICONS.background, async (file) => {
-    backdrop = file ? await loadImage(file) : null;
-    backdropSource = file;
-    rebuild();
-    changed();
-  });
-  // Music has its key with the pictures, and a level slider that shows once there is music.
-  const musicAudio = new Audio();
-  musicAudio.loop = true;
-  musicAudio.preload = "auto";
-  const musicLevel = element("label", "ag-field ag-music-level");
-  const musicLevelName = element("span", "ag-field-name");
-  musicLevelName.textContent = labels.musicVolume;
-  const musicSlider = element("input", "ag-slider");
-  musicSlider.type = "range";
-  musicSlider.min = "0";
-  musicSlider.max = "100";
-  musicSlider.value = String(Math.round(musicVolume * 100));
-  musicLevel.append(musicLevelName, musicSlider);
-  musicLevel.hidden = true;
-  const setMusic = async (file: Blob | string | null) => {
-    if (music) URL.revokeObjectURL(music.url);
-    music = null;
-    musicAudio.pause();
-    musicAudio.removeAttribute("src");
-    if (file) {
-      const next = await decode(file);
-      music = { ...next, duration: next.samples.length / next.sampleRate };
-      musicAudio.src = music.url;
-      musicAudio.volume = musicVolume;
-    }
-    musicSource = file;
-    musicLevel.hidden = !music;
-  };
-  const musicKey = pictureKey("ag-music", labels.music, labels.musicOff, ICONS.music, async (file) => {
-    await setMusic(file);
-    changed();
-  }, "audio/*");
-  musicSlider.addEventListener("input", () => {
-    musicVolume = Number(musicSlider.value) / 100;
-    musicAudio.volume = musicVolume;
-    changed();
-  });
-  looks.append(layoutChoice, visualChoice, coverButton, coverInput, backgroundKey.button, backgroundKey.input, musicKey.button, musicKey.input);
+  themeTiles.classList.add("ag-swatches");
+  for (const [index, button] of [...themeTiles.children].entries()) button.setAttribute("aria-label", labels.theme(THEMES[index].name));
 
+  // Text: what the frame says, and up to three links.
   const field = (text: string, value: string, apply: (value: string) => void) => {
     const label = element("label", "ag-field");
     const name = element("span", "ag-field-name");
@@ -478,13 +506,6 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     label.append(name, input);
     return label;
   };
-  const fields = element("div", "ag-fields");
-  fields.append(
-    field(labels.title, title, (value) => (title = value)),
-    field(labels.speaker, speaker, (value) => (speaker = value)),
-    field(labels.handle, handle, (value) => (handle = value)),
-  );
-  // Three boxes under one name, each a link on its own; the clip shows the filled ones in a row along the bottom.
   const linkGroup = element("fieldset", "ag-field ag-links");
   const linkName = element("legend", "ag-field-name");
   linkName.textContent = labels.links;
@@ -505,43 +526,177 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     });
     return input;
   }));
-  fields.append(linkGroup);
+  panes.text.append(
+    field(labels.title, title, (value) => (title = value)),
+    field(labels.speaker, speaker, (value) => (speaker = value)),
+    field(labels.handle, handle, (value) => (handle = value)),
+    linkGroup,
+  );
 
-  const captionsHead = element("div", "ag-captions-head");
-  const captionsTitle = element("h3", "ag-heading");
-  captionsTitle.textContent = labels.captions;
-  const tapButton = iconButton("ag-tap", labels.tap, ICONS.tap);
+  // Photos and music: each a row with what is on now, a key to choose one, and a key to take it off.
+  const fileRow = (pane: HTMLElement, name: string, accept: string, kind: "round" | "wide" | "sound", failed: string, apply: (file: Blob | null) => Promise<void>) => {
+    heading(pane, name);
+    const row = element("div", "ag-file");
+    const thumb = element("span", `ag-thumb ag-thumb-${kind}`);
+    const what = element("span", "ag-file-name");
+    const choose = keyButton("ag-choose", labels.choose, ICONS.add);
+    const remove = keyButton("ag-take-off", labels.remove, ICONS.remove);
+    const input = element("input", "ag-hidden");
+    input.type = "file";
+    input.accept = accept;
+    input.tabIndex = -1;
+    let shown: string | null = null;
+    const show = (file: Blob | string | null) => {
+      if (shown) URL.revokeObjectURL(shown);
+      shown = null;
+      thumb.replaceChildren();
+      if (file && kind !== "sound") {
+        const image = element("img", "");
+        image.alt = "";
+        image.src = typeof file === "string" ? file : (shown = URL.createObjectURL(file));
+        thumb.append(image);
+      } else thumb.append(icon(kind === "sound" ? ICONS.music : ICONS.photo));
+      what.textContent = file ? (file instanceof File ? file.name : typeof file === "string" && !file.startsWith("data:") ? file.split("/").pop() || name : name) : labels.none;
+      rename(choose, file ? labels.replace : labels.choose);
+      remove.hidden = !file;
+    };
+    choose.addEventListener("click", () => input.click());
+    remove.addEventListener("click", async () => {
+      await apply(null);
+      show(null);
+      choose.focus();
+    });
+    input.addEventListener("change", async () => {
+      const file = input.files?.[0];
+      input.value = "";
+      if (!file) return;
+      try {
+        await apply(file);
+        show(file);
+      } catch {
+        tell(failed);
+      }
+    });
+    row.append(thumb, what, choose, remove, input);
+    pane.append(row);
+    return { show };
+  };
+  const coverRow = fileRow(panes.photos, labels.cover, "image/*", "round", labels.pictureFailed, async (file) => {
+    cover = file ? await loadImage(file) : null;
+    coverSource = file;
+    rebuild();
+    changed();
+  });
+  const backgroundRow = fileRow(panes.photos, labels.background, "image/*", "wide", labels.pictureFailed, async (file) => {
+    backdrop = file ? await loadImage(file) : null;
+    backdropSource = file;
+    rebuild();
+    changed();
+  });
+
+  const musicAudio = new Audio();
+  musicAudio.loop = true;
+  musicAudio.preload = "auto";
+  const musicLevel = element("label", "ag-field ag-music-level");
+  const setMusic = async (file: Blob | string | null) => {
+    music?.close();
+    music = null;
+    musicAudio.pause();
+    musicAudio.removeAttribute("src");
+    if (file) {
+      const opened = await openSource(file, { outline: false });
+      const samples = await opened.read(0, Math.min(opened.duration, MUSIC_LENGTH), SAMPLE_RATE);
+      music = { samples, url: opened.url, duration: opened.duration, close: () => opened.close() };
+      musicAudio.src = opened.url;
+      musicAudio.volume = musicVolume;
+    }
+    musicSource = file;
+    musicLevel.hidden = !music;
+  };
+  const musicRow = fileRow(panes.music, labels.music, "audio/*,.mp3,.m4a,.wav", "sound", labels.musicFailed, async (file) => {
+    await setMusic(file);
+    changed();
+  });
+  const musicLevelName = element("span", "ag-field-name");
+  musicLevelName.textContent = labels.musicVolume;
+  const musicSlider = element("input", "ag-slider");
+  musicSlider.type = "range";
+  musicSlider.min = "0";
+  musicSlider.max = "100";
+  musicSlider.value = String(Math.round(musicVolume * 100));
+  musicLevel.append(musicLevelName, musicSlider);
+  musicLevel.hidden = true;
+  panes.music.append(musicLevel);
+  musicSlider.addEventListener("input", () => {
+    musicVolume = Number(musicSlider.value) / 100;
+    musicAudio.volume = musicVolume;
+    changed();
+  });
+
+  // Captions: the page's own controls first, then the editor's tools, a page of the clip's captions, and a transcript.
+  const captionsSlot = element("div", "ag-slot ag-slot-block");
+  const captionTools = element("div", "ag-tools");
+  const tapButton = keyButton("ag-tap", labels.tap, ICONS.tap);
   tapButton.setAttribute("aria-pressed", "false");
-  const importButton = iconButton("", labels.importCaptions, ICONS.file);
+  const addButton = keyButton("", labels.addCaption, ICONS.add);
+  const importButton = keyButton("", labels.importCaptions, ICONS.file);
   const importInput = element("input", "ag-hidden");
   importInput.type = "file";
   importInput.accept = ".srt,.vtt,text/vtt";
   importInput.tabIndex = -1;
-  const downloadButton = iconButton("", labels.downloadCaptions, ICONS.save);
-  const addButton = iconButton("", labels.addCaption, ICONS.add);
-  const captionsSlot = element("span", "ag-slot");
-  const noteSlot = element("div", "ag-note");
-  captionsHead.append(captionsTitle, captionsSlot, element("span", "ag-grow"), tapButton, addButton, importButton, downloadButton, importInput);
+  const downloadButton = keyButton("", labels.downloadCaptions, ICONS.save);
+  tapButton.title = labels.tapTitle;
+  importButton.title = labels.importTitle;
+  downloadButton.title = labels.downloadTitle;
+  captionTools.append(tapButton, addButton, importButton, downloadButton, importInput);
   const cueList = element("ol", "ag-cues");
-  const transcript = element("div", "ag-transcript");
-  const transcriptLabel = element("label", "ag-field");
-  const transcriptName = element("span", "ag-field-name");
-  transcriptName.textContent = labels.transcript;
+  const pager = element("div", "ag-pager");
+  const earlierButton = iconButton("", labels.earlier, ICONS.previous);
+  const laterButton = iconButton("", labels.later, ICONS.next);
+  const pageText = element("span", "ag-page");
+  pager.append(earlierButton, pageText, laterButton);
+  const transcript = element("details", "ag-more");
+  const transcriptSummary = element("summary", "");
+  transcriptSummary.textContent = labels.transcript;
+  const transcriptHelp = element("p", "ag-help");
+  transcriptHelp.textContent = labels.transcriptHelp;
   const transcriptInput = element("textarea", "ag-input ag-textarea");
   transcriptInput.rows = 3;
-  transcriptLabel.append(transcriptName, transcriptInput);
-  const spreadButton = iconButton("", labels.spread, ICONS.spread);
-  transcript.append(transcriptLabel, spreadButton);
-  panel.append(looks, musicLevel, themeChoice, fields, captionsHead, noteSlot, cueList, transcript);
+  transcriptInput.setAttribute("aria-label", labels.transcript);
+  const spreadButton = keyButton("", labels.spread, ICONS.spread);
+  transcript.append(transcriptSummary, transcriptHelp, transcriptInput, spreadButton);
+  panes.captions.append(captionsSlot, captionTools, cueList, pager, transcript);
 
+  // The recording: transport, an overview when zoomed in, the playhead's strip, and the waveform to select on.
   const timeline = element("div", "ag-timeline");
-  const openButton = iconButton("ag-open", labels.open, ICONS.open);
-  const audioInput = element("input", "ag-hidden");
-  audioInput.type = "file";
-  audioInput.accept = "audio/*,video/*";
-  audioInput.tabIndex = -1;
+  const transport = element("div", "ag-transport");
   const playButton = iconButton("ag-play", labels.play, ICONS.play);
-  const clock = element("span", "ag-clock");
+  const clipClock = element("span", "ag-clock");
+  const reading = element("span", "ag-reading");
+  const zoomOutButton = iconButton("ag-zoom", labels.zoomOut, ICONS.zoomOut);
+  const zoomInButton = iconButton("ag-zoom", labels.zoomIn, ICONS.zoomIn);
+  const wholeButton = keyButton("ag-fit", labels.fit, ICONS.fit);
+  wholeButton.title = labels.whole;
+  const zoomKeys = element("div", "ag-zoom-keys");
+  const zoomName = element("span", "ag-zoom-name");
+  zoomName.textContent = labels.zoom;
+  zoomName.setAttribute("aria-hidden", "true");
+  zoomKeys.append(zoomName, zoomOutButton, zoomInButton, wholeButton);
+  const addPartButton = keyButton("ag-add-part", labels.addPart, ICONS.addPart);
+  addPartButton.title = labels.addPartHint;
+  transport.append(playButton, clipClock, reading, element("span", "ag-grow"), zoomKeys, addPartButton);
+
+  const map = element("div", "ag-map");
+  map.setAttribute("role", "img");
+  map.setAttribute("aria-label", labels.overview);
+  const mapCanvas = element("canvas", "ag-map-wave");
+  const mapView = element("span", "ag-map-view");
+  map.append(mapCanvas, mapView);
+  const zoomed = element("div", "ag-zoomed");
+  const scrub = element("div", "ag-scrub");
+  scrub.setAttribute("role", "slider");
+  scrub.setAttribute("aria-label", labels.playhead);
+  scrub.tabIndex = 0;
   const track = element("div", "ag-track");
   track.setAttribute("role", "group");
   track.setAttribute("aria-label", labels.timeline);
@@ -556,30 +711,18 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     handleNode.tabIndex = 0;
   }
   track.append(wave, selection, startHandle, endHandle);
-  // The playhead has a strip of its own above the recording, so moving it never moves the selection.
-  const scrub = element("div", "ag-scrub");
-  scrub.setAttribute("role", "slider");
-  scrub.setAttribute("aria-label", labels.playhead);
-  scrub.tabIndex = 0;
   const playheadLine = element("div", "ag-playhead");
   playheadLine.append(element("span", "ag-knob"));
+  zoomed.append(scrub, track, playheadLine);
   const lane = element("div", "ag-lane");
-  lane.append(scrub, track, playheadLine);
-  const exportButton = iconButton("ag-export", labels.export, ICONS.export);
-  const meter = element("span", "ag-meter");
-  exportButton.append(meter);
-  const addPartButton = iconButton("ag-add-part", labels.addPart, ICONS.addPart);
-  const timelineSlot = element("span", "ag-slot");
-  timeline.append(openButton, audioInput, playButton, clock, lane, addPartButton, timelineSlot, exportButton);
+  lane.append(map, zoomed);
+  timeline.append(transport, lane);
   const partList = element("ol", "ag-parts");
   partList.setAttribute("aria-label", labels.parts);
 
   const live = element("div", "ag-live");
   live.setAttribute("role", "status");
-  // The editor answers its own width, so the parts sit in a grid inside it rather than on it.
-  const grid = element("div", "ag-grid");
-  grid.append(stage, panel, timeline, partList);
-  root.append(grid, live);
+  shell.append(header, body, timeline, partList, live);
   container.append(root);
 
   const audio = new Audio();
@@ -587,12 +730,37 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   const announce = (message: string) => {
     live.textContent = "";
-    requestAnimationFrame(() => (live.textContent = message));
+    setTimeout(() => (live.textContent = message), 50);
   };
+  // A message on the picture for a few seconds, for what went wrong with something the user did.
+  let noticeTimer = 0;
+  const tell = (message: string) => {
+    notice.textContent = message;
+    notice.hidden = false;
+    announce(message);
+    clearTimeout(noticeTimer);
+    noticeTimer = window.setTimeout(() => (notice.hidden = true), 7000);
+  };
+
+  function selectTab(next: Tab) {
+    tab = next;
+    root.dataset.tab = next;
+    tabButtons.forEach((button, index) => {
+      const on = TABS[index] === next;
+      button.setAttribute("aria-selected", String(on));
+      button.tabIndex = on ? 0 : -1;
+      panes[TABS[index]].hidden = !on;
+    });
+    if (next === "captions") measureCues();
+  }
 
   // The picture.
 
-  const scene = (): Scene => ({
+  let clipAudio: { key: string; samples: Float32Array } | null = null;
+  let clipPending: { key: string; promise: Promise<Float32Array> } | null = null;
+  const clipKey = () => `${generation}|${spans().map(([start, end]) => `${start.toFixed(3)}-${end.toFixed(3)}`).join(",")}`;
+
+  const scene = (samples?: Float32Array): Scene => ({
     layout,
     visual,
     theme,
@@ -604,22 +772,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     overlay: overlay ?? undefined,
     backdrop,
     logo,
-    music: music ? { samples: music.samples, gain: musicVolume } : null,
     links,
+    music: music ? { samples: music.samples, gain: musicVolume } : null,
     captions: paginate(parts.length ? stitchCues(cues, parts) : clip(cues, range[0], range[1]), pageLength(layout)),
-    audio: !recording
-      ? { samples: new Float32Array(1), sampleRate: 48000, start: 0, end: 0 }
-      : parts.length
-        ? { samples: stitchedSamples(), sampleRate: recording.sampleRate, start: 0, end: partsLength(parts) }
-        : { samples: recording.samples, sampleRate: recording.sampleRate, start: range[0], end: range[1] },
+    audio: { samples: samples ?? (clipAudio?.key === clipKey() ? clipAudio.samples : SILENCE), sampleRate: SAMPLE_RATE, start: 0, end: Math.max(0, clipLength()) },
   });
 
-  // The parts' sound joined end to end, made again only when the parts or the recording change.
-  function stitchedSamples(): Float32Array {
-    const key = `${recording!.url}|${parts.map((part) => part.join("-")).join(",")}`;
-    if (stitched?.key !== key) stitched = { key, samples: stitch(recording!.samples, recording!.sampleRate, parts) };
-    return stitched.samples;
-  }
   let painter = new Painter(scene());
   const ctx = preview.getContext("2d", { alpha: false })!;
 
@@ -674,39 +832,101 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     renderCues();
   }
 
+  // The clip's own sound, read from the recording at 48 kHz once its stretches settle, for the picture and the export.
+  function loadClip(): Promise<Float32Array> {
+    const key = clipKey();
+    if (clipAudio?.key === key) return Promise.resolve(clipAudio.samples);
+    if (clipPending?.key === key) return clipPending.promise;
+    if (!source) return Promise.resolve(SILENCE);
+    const from = source;
+    const promise = Promise.all(spans().map(([start, end]) => from.read(start, end, SAMPLE_RATE))).then((pieces) => {
+      const samples = pieces.length > 1 ? joinParts(pieces, SAMPLE_RATE) : pieces[0];
+      if (key === clipKey()) {
+        clipAudio = { key, samples };
+        rebuild();
+      }
+      return samples;
+    });
+    clipPending = { key, promise };
+    void promise.catch(() => {}).finally(() => {
+      if (clipPending?.key === key) clipPending = null;
+    });
+    return promise;
+  }
+  let clipTimer = 0;
+  function scheduleClip() {
+    clearTimeout(clipTimer);
+    if (source) clipTimer = window.setTimeout(() => void loadClip().catch(() => {}), 150);
+  }
+
   // The recording along the bottom.
 
-  let peakCache: { width: number; data: Float32Array } | null = null;
+  const toX = (time: number) => ((time - view[0]) / Math.max(1e-6, view[1] - view[0])) * 100;
+  const inView = (time: number) => time >= view[0] && time <= view[1];
 
-  const toX = (time: number) => (recording ? (time / recording.duration) * 100 : 0);
+  function sizeCanvas(canvas: HTMLCanvasElement, box: HTMLElement) {
+    const ratio = devicePixelRatio || 1;
+    const width = Math.max(1, Math.round(box.clientWidth * ratio));
+    const height = Math.max(1, Math.round(box.clientHeight * ratio));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    return { width, height, ratio };
+  }
 
   function drawWave() {
-    const ratio = devicePixelRatio || 1;
-    const width = Math.max(1, Math.round(track.clientWidth * ratio));
-    const height = Math.max(1, Math.round(track.clientHeight * ratio));
-    if (wave.width !== width || wave.height !== height) {
-      wave.width = width;
-      wave.height = height;
-      peakCache = null;
-    }
+    const { width, height, ratio } = sizeCanvas(wave, track);
     const g = wave.getContext("2d")!;
     g.clearRect(0, 0, width, height);
-    if (!recording) return;
-    const bars = Math.floor(width / (3 * ratio));
-    if (!peakCache || peakCache.width !== bars) peakCache = { width: bars, data: peaks(recording.samples, bars) };
+    if (!source) return;
+    const bars = Math.max(1, Math.floor(width / (3 * ratio)));
+    const data = outlineBars(source.outline, OUTLINE_RATE, view, bars);
     const style = getComputedStyle(root);
     const inside = style.getPropertyValue("--ag-wave-in").trim() || "#121212";
     const outside = style.getPropertyValue("--ag-wave").trim() || "#999";
     const mid = height / 2;
     for (let i = 0; i < bars; i++) {
-      const low = peakCache.data[i * 2];
-      const high = peakCache.data[i * 2 + 1];
-      const time = ((i + 0.5) / bars) * recording.duration;
+      const time = view[0] + ((i + 0.5) / bars) * (view[1] - view[0]);
       const lit = (time >= range[0] && time <= range[1]) || parts.some(([start, end]) => time >= start && time <= end);
       g.fillStyle = lit ? inside : outside;
-      const amplitude = Math.max(1 * ratio, (high - low) * mid * 0.92);
+      // Not read yet: a faint flat line where the sound will show.
+      g.globalAlpha = time > source.outlined ? 0.4 : 1;
+      const amplitude = Math.max(1 * ratio, (data[i * 2 + 1] - data[i * 2]) * mid * 0.92);
       g.fillRect(i * 3 * ratio, mid - amplitude / 2, 2 * ratio, amplitude);
     }
+    g.globalAlpha = 1;
+  }
+
+  // The overview, shown while zoomed in: the whole recording, where the view is, and where the clip is.
+  function drawMap() {
+    const whole = !source || view[1] - view[0] >= duration() - 1e-6;
+    map.hidden = whole;
+    if (whole || !source) return;
+    const { width, height, ratio } = sizeCanvas(mapCanvas, map);
+    const g = mapCanvas.getContext("2d")!;
+    g.clearRect(0, 0, width, height);
+    const bars = Math.max(1, Math.floor(width / (2 * ratio)));
+    const data = outlineBars(source.outline, OUTLINE_RATE, [0, duration()], bars);
+    const style = getComputedStyle(root);
+    const outside = style.getPropertyValue("--ag-wave").trim() || "#999";
+    const accent = style.getPropertyValue("--ag-accent").trim() || "#2ff0b8";
+    const mid = height / 2;
+    for (let i = 0; i < bars; i++) {
+      const time = ((i + 0.5) / bars) * duration();
+      g.fillStyle = spans().some(([start, end]) => time >= start && time <= end) ? accent : outside;
+      const amplitude = Math.max(ratio, (data[i * 2 + 1] - data[i * 2]) * mid * 0.9);
+      g.fillRect(i * 2 * ratio, mid - amplitude / 2, ratio, amplitude);
+    }
+    mapView.style.left = `${(view[0] / duration()) * 100}%`;
+    mapView.style.width = `${((view[1] - view[0]) / duration()) * 100}%`;
+  }
+
+  function setView(next: View) {
+    view = next;
+    drawWave();
+    drawMap();
+    placeTimeline();
   }
 
   function placeTimeline() {
@@ -714,31 +934,44 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     selection.style.width = `${toX(range[1]) - toX(range[0])}%`;
     startHandle.style.left = `${toX(range[0])}%`;
     endHandle.style.left = `${toX(range[1])}%`;
+    startHandle.hidden = !inView(range[0]);
+    endHandle.hidden = !inView(range[1]);
     playheadLine.style.left = `${toX(playhead)}%`;
+    playheadLine.hidden = !source || !inView(playhead);
     // The strip lights where the clip is, which is where the playhead can go.
-    const lit = [...spans()].sort((a, b) => a[0] - b[0]).flatMap(([start, end]) => [`transparent ${toX(start)}%`, `var(--ag-accent) ${toX(start)}%`, `var(--ag-accent) ${toX(end)}%`, `transparent ${toX(end)}%`]);
+    const clamp = (value: number) => Math.min(100, Math.max(0, value));
+    const lit = [...spans()].sort((a, b) => a[0] - b[0]).flatMap(([start, end]) => [`transparent ${clamp(toX(start))}%`, `var(--ag-accent) ${clamp(toX(start))}%`, `var(--ag-accent) ${clamp(toX(end))}%`, `transparent ${clamp(toX(end))}%`]);
     scrub.style.setProperty("--ag-lit", `linear-gradient(to right, ${["transparent 0%", ...lit, "transparent 100%"].join(", ")})`);
     scrub.setAttribute("aria-valuemin", "0");
-    scrub.setAttribute("aria-valuemax", String(Math.round((recording?.duration ?? 0) * 10) / 10));
+    scrub.setAttribute("aria-valuemax", String(Math.round(duration() * 10) / 10));
     scrub.setAttribute("aria-valuenow", String(Math.round(playhead * 10) / 10));
     scrub.setAttribute("aria-valuetext", formatTime(playhead));
     const length = range[1] - range[0];
     for (const [handleNode, value] of [[startHandle, range[0]], [endHandle, range[1]]] as const) {
       handleNode.setAttribute("aria-valuemin", "0");
-      handleNode.setAttribute("aria-valuemax", String(Math.round((recording?.duration ?? 0) * 10) / 10));
+      handleNode.setAttribute("aria-valuemax", String(Math.round(duration() * 10) / 10));
       handleNode.setAttribute("aria-valuenow", String(Math.round(value * 10) / 10));
       handleNode.setAttribute("aria-valuetext", `${formatTime(value)}, clip ${formatTime(length)} long`);
     }
-    clock.textContent = `${formatTime(Math.max(0, clipTime()))} / ${formatTime(clipLength())}`;
+    clipClock.textContent = `${formatTime(Math.max(0, clipTime()))} / ${formatTime(clipLength())}`;
+    const outlined = source?.outlined ?? 0;
+    reading.textContent = source && outlined < duration() ? labels.reading(clock(outlined), clock(duration())) : "";
+    // The zoom keys show for recordings long enough to need them, and rest at their limits.
+    const span = view[1] - view[0];
+    zoomKeys.hidden = !source || duration() <= ZOOMABLE;
+    zoomInButton.disabled = span <= Math.min(10, duration()) + 1e-6;
+    zoomOutButton.disabled = wholeButton.disabled = span >= duration() - 1e-6;
     // A part can be added while the clip has room for the whole selected stretch.
-    const full = !recording || partsLength(parts) + length > maxLength + 1e-6;
+    exportButton.disabled = !source;
+    openButton.disabled = exporting;
+    const full = !source || partsLength(parts) + length > maxLength + 1e-6;
     addPartButton.disabled = full;
-    addPartButton.setAttribute("aria-label", recording && full ? labels.partsFull : labels.addPart);
-    addPartButton.title = recording && full ? labels.partsFull : labels.addPart;
+    addPartButton.title = source && full ? labels.partsFull : labels.addPartHint;
   }
 
-  function setRange(start: number, end: number, which?: "start" | "end") {
-    const total = recording?.duration ?? Math.max(start, end);
+  function setRange(start: number, end: number, which?: "start" | "end", reveal = true) {
+    if (exporting) return;
+    const total = duration() || Math.max(start, end);
     start = Math.max(0, Math.min(start, total - MIN_LENGTH));
     end = Math.min(total, Math.max(end, start + MIN_LENGTH));
     // The longest clip allowed: the edge being dragged pushes the other along rather than going past it.
@@ -748,15 +981,19 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     }
     range = [start, end];
     if (playhead < start || playhead > end) playhead = start;
+    if (reveal && source) view = showSpan(view, duration(), range);
     drawWave();
+    drawMap();
     placeTimeline();
     rebuild();
+    scheduleClip();
   }
 
   // Playback: the picture follows the sound.
 
   let frame = 0;
   let playing = 0;
+  let shownCue = -1;
   function tick() {
     frame = 0;
     if (audio.paused) return;
@@ -777,17 +1014,24 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     }
     paint();
     placeTimeline();
+    // The captions list keeps the one being said on show.
+    const active = cueAt(cues, playhead);
+    if (active !== shownCue) {
+      shownCue = active;
+      renderCues();
+    }
     frame = requestAnimationFrame(tick);
   }
 
   function play() {
-    if (!recording || exporting) return;
+    if (!source || exporting) return;
     const list = spans();
     playing = list.findIndex(([start, end]) => playhead >= start && playhead < end - 0.05);
     if (playing < 0) {
       playing = 0;
       playhead = list[0][0];
     }
+    void loadClip().catch(() => {});
     audio.currentTime = playhead;
     painter.reset();
     void audio.play();
@@ -813,7 +1057,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }
 
   function seek(time: number) {
-    playhead = intoClip(Math.max(0, Math.min(recording?.duration ?? 0, time)));
+    playhead = intoClip(Math.max(0, Math.min(duration(), time)));
     if (!audio.paused) {
       audio.currentTime = playhead;
       if (music) musicAudio.currentTime = clipTime() % music.duration;
@@ -821,14 +1065,40 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     painter.reset();
     paint();
     placeTimeline();
+    renderCues();
   }
 
-  // Captions: a list to edit, a transcript to spread, and timing by tapping along.
+  // Captions: a page of the clip's captions to edit, a transcript to spread, and timing by tapping along.
+
+  let cuePage = 0;
+  // How many rows fit, measured from the list's room on a wide editor; a narrow one lists them all.
+  let perPage = 0;
+  function measureCues() {
+    const wide = root.clientWidth >= 760;
+    // A real row's height, since touch screens make them taller; 36 px until one is on show.
+    const row = (cueList.querySelector<HTMLElement>(".ag-cue")?.offsetHeight ?? 32) + 4;
+    const next = wide && cueList.clientHeight ? Math.max(1, Math.floor((cueList.clientHeight + 4) / row)) : 0;
+    if (next !== perPage) {
+      perPage = next;
+      renderCues();
+    }
+  }
+
+  // Captions can arrive while a row is open for typing, so a row finds its caption again by what it is, not where it was.
+  const findCue = (cue: Cue) => cues.findIndex((item) => item === cue || (item.start === cue.start && item.end === cue.end && item.text === cue.text));
 
   function renderCues() {
     const shown = cues.map((cue, index) => ({ cue, index })).filter(({ cue }) => cue.end > range[0] && cue.start < range[1]);
     const active = cueAt(cues, playhead);
-    const rows = shown.map(({ cue, index }) => {
+    const size = perPage || Math.max(1, shown.length);
+    const pages = Math.max(1, Math.ceil(shown.length / size));
+    if (!audio.paused) {
+      const at = shown.findIndex(({ index }) => index === active);
+      if (at >= 0) cuePage = Math.floor(at / size);
+    }
+    cuePage = Math.min(Math.max(0, cuePage), pages - 1);
+    const page = shown.slice(cuePage * size, cuePage * size + size);
+    const rows = page.map(({ cue, index }) => {
       const row = element("li", "ag-cue");
       if (index === active) row.dataset.active = "";
       const time = element("button", "ag-time");
@@ -842,21 +1112,32 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       text.autocomplete = "off";
       text.setAttribute("aria-label", `${labels.captionText} ${formatTime(cue.start)}`);
       text.addEventListener("change", () => {
+        const at = findCue(cue);
         // New words lose the old ones' timings and share the caption's time again.
-        cues[index] = { start: cue.start, end: cue.end, text: text.value.trim(), ...(cue.speaker ? { speaker: cue.speaker } : {}) };
+        if (at >= 0) cues[at] = { start: cue.start, end: cue.end, text: text.value.trim(), ...(cue.speaker ? { speaker: cue.speaker } : {}) };
         cues = cues.filter((item) => item.text);
         rebuild();
       });
       const remove = iconButton("ag-remove", labels.removeCaption, ICONS.remove);
       remove.addEventListener("click", () => {
-        cues.splice(index, 1);
+        const at = findCue(cue);
+        if (at >= 0) cues.splice(at, 1);
         rebuild();
       });
       row.append(time, text, remove);
       return row;
     });
+    pager.hidden = pages <= 1;
+    pageText.textContent = shown.length ? labels.page(cuePage * size + 1, Math.min(shown.length, (cuePage + 1) * size), shown.length) : "";
+    earlierButton.disabled = cuePage === 0;
+    laterButton.disabled = cuePage >= pages - 1;
     // Rebuilding the list would drop the focus of someone typing, so it is left alone while they are.
     if (cueList.contains(document.activeElement) && document.activeElement instanceof HTMLInputElement) return;
+    if (!rows.length) {
+      const empty = element("li", "ag-cues-empty");
+      empty.textContent = labels.noCaptions;
+      rows.push(empty);
+    }
     cueList.replaceChildren(...rows);
   }
 
@@ -895,23 +1176,52 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   // Loading.
 
+  let outlineTimer = 0;
+  function outlineChanged() {
+    if (outlineTimer) return;
+    outlineTimer = window.setTimeout(() => {
+      outlineTimer = 0;
+      drawWave();
+      drawMap();
+      placeTimeline();
+    }, 150);
+  }
+
+  let opening = 0;
   async function load(from: string | Blob) {
+    if (exporting) return;
+    const mine = ++opening;
     stop();
     root.dataset.state = "loading";
     announce(labels.loading);
-    const next = await decode(from);
-    if (recording) URL.revokeObjectURL(recording.url);
-    recording = { ...next, duration: next.samples.length / next.sampleRate };
-    source = from;
+    let next: AudioSource;
+    try {
+      next = await openSource(from, { onOutline: outlineChanged });
+    } catch (error) {
+      if (mine !== opening) return;
+      root.dataset.state = source ? "ready" : "empty";
+      tell(labels.openFailed);
+      throw error;
+    }
+    // A recording picked after this one has taken its place.
+    if (mine !== opening) return next.close();
+    source?.close();
+    source = next;
+    sourceInput = from;
+    generation++;
+    clipAudio = null;
     if (parts.length) {
       parts = [];
       renderParts();
       options.onParts?.([]);
     }
-    audio.src = recording.url;
+    audio.src = next.url;
     root.dataset.state = "ready";
     live.textContent = "";
-    const [start, end] = range[1] > range[0] ? range : [0, Math.min(recording.duration, 30)];
+    const keep = firstLoad && range[1] > range[0] && range[1] <= next.duration;
+    firstLoad = false;
+    const [start, end] = keep ? range : [0, Math.min(next.duration, 30)];
+    view = initialView(next.duration, [start, end]);
     playhead = start;
     setRange(start, end);
   }
@@ -919,16 +1229,20 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // Exporting.
 
   async function exportVideo(): Promise<ExportResult | null> {
-    if (!recording || exporting) return null;
+    if (!source || exporting) return null;
     stop();
     exporting = true;
     root.dataset.state = "exporting";
-    exportButton.disabled = true;
+    exportButton.setAttribute("aria-disabled", "true");
     try {
-      const result = await exportClip(scene(), {
+      const frozen = scene();
+      const samples = await loadClip();
+      const result = await exportClip({ ...frozen, audio: { ...frozen.audio, samples } }, {
         onProgress: (fraction) => {
+          const percent = Math.round(fraction * 100);
           meter.style.setProperty("--progress", String(fraction));
-          exportButton.setAttribute("aria-label", labels.exporting(Math.round(fraction * 100)));
+          rename(exportButton, `${percent}%`);
+          exportButton.setAttribute("aria-label", labels.exporting(percent));
         },
       });
       announce(labels.exported(clipLength()));
@@ -942,13 +1256,14 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       }
       return result;
     } catch (error) {
-      announce(labels.failed);
+      tell(labels.failed);
       throw error;
     } finally {
       exporting = false;
       root.dataset.state = "ready";
-      exportButton.disabled = false;
-      exportButton.setAttribute("aria-label", labels.export);
+      exportButton.removeAttribute("aria-disabled");
+      rename(exportButton, labels.export);
+      exportButton.removeAttribute("aria-label");
       meter.style.removeProperty("--progress");
     }
   }
@@ -956,10 +1271,13 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // Parts: the add key keeps the selected stretch; each chip selects its part, removes it, or drags to a new place.
 
   function partsChanged() {
+    if (exporting) return;
     renderParts();
     drawWave();
+    drawMap();
     placeTimeline();
     rebuild();
+    scheduleClip();
     options.onParts?.(parts.map(([start, end]) => [start, end]));
   }
 
@@ -978,6 +1296,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       });
       const remove = iconButton("ag-part-remove", labels.removePart(index + 1), ICONS.remove);
       remove.addEventListener("click", () => {
+        if (exporting) return;
         parts.splice(index, 1);
         partsChanged();
       });
@@ -987,7 +1306,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }
 
   addPartButton.addEventListener("click", () => {
-    if (!recording || partsLength(parts) + range[1] - range[0] > maxLength + 1e-6) return;
+    if (!source || exporting || partsLength(parts) + range[1] - range[0] > maxLength + 1e-6) return;
     parts.push([range[0], range[1]]);
     partsChanged();
     announce(labels.part(parts.length, formatTime(range[0]), formatTime(range[1])));
@@ -997,7 +1316,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let reordered = false;
   partList.addEventListener("pointerdown", (event) => {
     const item = (event.target as Element).closest<HTMLElement>(".ag-part");
-    if (!item || (event.target as Element).closest(".ag-part-remove") || event.button !== 0) return;
+    if (!item || exporting || (event.target as Element).closest(".ag-part-remove") || event.button !== 0) return;
     reorder = { pointerId: event.pointerId, index: Number(item.dataset.index), x: event.clientX };
     reordered = false;
   });
@@ -1007,11 +1326,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (!reordered && Math.abs(event.clientX - reorder.x) < 6) return;
     if (!reordered) {
       reordered = true;
-      try {
-        partList.setPointerCapture(event.pointerId);
-      } catch {
-        // A pointer from a script can't be captured; the drag still follows it over the chips.
-      }
+      capture(partList, event.pointerId);
       root.dataset.reordering = "";
     }
     const over = [...partList.children].findIndex((child) => {
@@ -1040,55 +1355,64 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let drag: { kind: "start" | "end" | "move" | "new"; pointerId: number; from: number; x: number; range: [number, number] } | null = null;
   const timeAt = (clientX: number) => {
     const box = track.getBoundingClientRect();
-    return Math.max(0, Math.min(1, (clientX - box.left) / box.width)) * (recording?.duration ?? 0);
+    return view[0] + Math.max(0, Math.min(1, (clientX - box.left) / box.width)) * (view[1] - view[0]);
   };
+  function capture(node: HTMLElement, pointerId: number) {
+    try {
+      node.setPointerCapture(pointerId);
+    } catch {
+      // A pointer from a script can't be captured; the drag still works while it stays over the element.
+    }
+  }
   track.addEventListener("pointerdown", (event) => {
-    if (!recording || event.button !== 0) return;
+    if (!source || exporting || event.button !== 0) return;
     const target = event.target as Element;
     const time = timeAt(event.clientX);
     const kind = target === startHandle ? "start" : target === endHandle ? "end" : time > range[0] && time < range[1] ? "move" : "new";
     drag = { kind, pointerId: event.pointerId, from: time, x: event.clientX, range: [...range] };
-    try {
-      track.setPointerCapture(event.pointerId);
-    } catch {
-      // A pointer from a script can't be captured; the drag still works while it stays over the track.
-    }
+    capture(track, event.pointerId);
     event.preventDefault();
   });
   track.addEventListener("pointermove", (event) => {
     if (!drag || event.pointerId !== drag.pointerId) return;
     const delta = timeAt(event.clientX) - drag.from;
     const [start, end] = drag.range;
-    if (drag.kind === "start") setRange(start + delta, end, "start");
-    else if (drag.kind === "end") setRange(start, end + delta, "end");
+    if (drag.kind === "start") setRange(start + delta, end, "start", false);
+    else if (drag.kind === "end") setRange(start, end + delta, "end", false);
     else if (drag.kind === "new") {
       // A press that doesn't travel leaves the selection as it was.
       if (Math.abs(event.clientX - drag.x) < 4) return;
       const at = timeAt(event.clientX);
-      setRange(Math.min(drag.from, at), Math.max(drag.from, at), at < drag.from ? "start" : "end");
+      setRange(Math.min(drag.from, at), Math.max(drag.from, at), at < drag.from ? "start" : "end", false);
     } else {
-      const total = recording!.duration;
-      const shift = Math.max(-start, Math.min(total - end, delta));
-      setRange(start + shift, end + shift);
+      const shift = Math.max(-start, Math.min(duration() - end, delta));
+      setRange(start + shift, end + shift, undefined, false);
     }
   });
   const endDrag = () => (drag = null);
   track.addEventListener("pointerup", endDrag);
   track.addEventListener("pointercancel", endDrag);
 
+  for (const [handleNode, which] of [[startHandle, "start"], [endHandle, "end"]] as const) {
+    handleNode.addEventListener("keydown", (event) => {
+      const step = event.shiftKey ? 1 : 0.1;
+      const delta = event.key === "ArrowRight" || event.key === "ArrowUp" ? step : event.key === "ArrowLeft" || event.key === "ArrowDown" ? -step : 0;
+      if (!delta) return;
+      event.preventDefault();
+      if (which === "start") setRange(range[0] + delta, range[1], "start");
+      else setRange(range[0], range[1] + delta, "end");
+    });
+  }
+
   // Pointer on the strip: press anywhere and drag, and the playhead and the picture follow. Playback pauses while it
   // moves and carries on from where it is let go.
   let scrubbing: { pointerId: number; resume: boolean } | null = null;
   scrub.addEventListener("pointerdown", (event) => {
-    if (!recording || event.button !== 0) return;
+    if (!source || event.button !== 0) return;
     scrubbing = { pointerId: event.pointerId, resume: !audio.paused && !tapping };
     if (!audio.paused) stop();
     root.dataset.scrubbing = "";
-    try {
-      scrub.setPointerCapture(event.pointerId);
-    } catch {
-      // A pointer from a script can't be captured; the strip still follows it while it stays over it.
-    }
+    capture(scrub, event.pointerId);
     event.preventDefault();
     scrub.focus({ preventScroll: true });
     seek(timeAt(event.clientX));
@@ -1118,16 +1442,38 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     seek(to);
   });
 
-  for (const [handleNode, which] of [[startHandle, "start"], [endHandle, "end"]] as const) {
-    handleNode.addEventListener("keydown", (event) => {
-      const step = event.shiftKey ? 1 : 0.1;
-      const delta = event.key === "ArrowRight" || event.key === "ArrowUp" ? step : event.key === "ArrowLeft" || event.key === "ArrowDown" ? -step : 0;
-      if (!delta) return;
+  // Zoom: the keys, Ctrl or Cmd with the wheel about the pointer, and a sideways swipe or Shift with the wheel to move.
+  const zoomAnchor = () => (inView((range[0] + range[1]) / 2) ? (range[0] + range[1]) / 2 : (view[0] + view[1]) / 2);
+  zoomInButton.addEventListener("click", () => setView(zoomView(view, duration(), 0.5, zoomAnchor())));
+  zoomOutButton.addEventListener("click", () => setView(zoomView(view, duration(), 2, zoomAnchor())));
+  wholeButton.addEventListener("click", () => setView([0, duration()]));
+  zoomed.addEventListener("wheel", (event) => {
+    if (!source) return;
+    if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
-      if (which === "start") setRange(range[0] + delta, range[1], "start");
-      else setRange(range[0], range[1] + delta, "end");
-    });
-  }
+      setView(zoomView(view, duration(), Math.exp(event.deltaY * 0.002), timeAt(event.clientX)));
+    } else if (event.shiftKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+      event.preventDefault();
+      const delta = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX;
+      setView(panView(view, duration(), (delta / Math.max(1, track.clientWidth)) * (view[1] - view[0])));
+    }
+  }, { passive: false });
+  // The overview moves the view: press where to look, and drag.
+  let mapping: number | null = null;
+  const lookAt = (clientX: number) => {
+    const box = map.getBoundingClientRect();
+    const time = Math.max(0, Math.min(1, (clientX - box.left) / box.width)) * duration();
+    setView(panView(view, duration(), time - (view[0] + view[1]) / 2));
+  };
+  map.addEventListener("pointerdown", (event) => {
+    if (!source || event.button !== 0) return;
+    mapping = event.pointerId;
+    capture(map, event.pointerId);
+    lookAt(event.clientX);
+  });
+  map.addEventListener("pointermove", (event) => mapping === event.pointerId && lookAt(event.clientX));
+  map.addEventListener("pointerup", () => (mapping = null));
+  map.addEventListener("pointercancel", () => (mapping = null));
 
   // Buttons and keys.
 
@@ -1136,24 +1482,18 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   openButton.addEventListener("click", () => audioInput.click());
   audioInput.addEventListener("change", () => {
     const file = audioInput.files?.[0];
-    if (file) void load(file);
+    if (file) void load(file).catch(() => {});
     audioInput.value = "";
-  });
-  coverButton.addEventListener("click", () => coverInput.click());
-  coverInput.addEventListener("change", async () => {
-    const file = coverInput.files?.[0];
-    coverInput.value = "";
-    if (!file) return;
-    cover = await loadImage(file);
-    coverSource = file;
-    rebuild();
-    changed();
   });
   tapButton.addEventListener("click", () => setTapping(!tapping));
   preview.addEventListener("pointerdown", () => tapping && tap());
   addButton.addEventListener("click", () => {
     const start = Math.max(range[0], playhead);
     cues = [...cues, { start, end: Math.min(range[1], start + 2), text: labels.captionText }].sort((a, b) => a.start - b.start);
+    // The new caption's page comes up, with its text ready to type over.
+    const shown = cues.filter((cue) => cue.end > range[0] && cue.start < range[1]);
+    const at = shown.findIndex((cue) => cue.start === start && cue.text === labels.captionText);
+    if (perPage && at >= 0) cuePage = Math.floor(at / perPage);
     rebuild();
     const input = [...cueList.querySelectorAll<HTMLInputElement>(".ag-cue-text")].find((item) => item.value === labels.captionText);
     input?.focus();
@@ -1178,13 +1518,22 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const lines = transcriptInput.value.split("\n");
     const outside = cues.filter((cue) => cue.end <= range[0] || cue.start >= range[1]);
     cues = [...outside, ...spread(lines, range[0], range[1])].sort((a, b) => a.start - b.start);
+    cuePage = 0;
     rebuild();
+  });
+  earlierButton.addEventListener("click", () => {
+    cuePage--;
+    renderCues();
+  });
+  laterButton.addEventListener("click", () => {
+    cuePage++;
+    renderCues();
   });
 
   // Space plays and pauses, unless someone is typing; while tapping, it marks the next caption instead.
   root.addEventListener("keydown", (event) => {
     const target = event.target as HTMLElement;
-    if (target.closest("input, textarea, [role=radio], [role=slider]") || event.key !== " ") return;
+    if (target.closest("input, textarea, summary, [role=radio], [role=slider], [role=tab]") || event.key !== " ") return;
     if (target.tagName === "BUTTON") return;
     event.preventDefault();
     if (tapping) tap();
@@ -1192,7 +1541,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     else stop();
   });
 
-  // A file dropped anywhere on the editor opens.
+  // A file dropped anywhere on the editor opens: a recording, captions, or a picture for the profile.
   root.addEventListener("dragover", (event) => {
     if (!event.dataTransfer?.types.includes("Files")) return;
     event.preventDefault();
@@ -1209,32 +1558,43 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (file.type.startsWith("image/")) void loadImage(file).then((image) => {
       cover = image;
       coverSource = file;
+      coverRow.show(file);
       rebuild();
       changed();
-    });
+    }).catch(() => tell(labels.pictureFailed));
     else if (/\.(srt|vtt)$/i.test(file.name)) void file.text().then((text) => {
       cues = parseSubtitles(text);
       rebuild();
     });
-    else void load(file);
+    else void load(file).catch(() => {});
   });
 
-  const observer = new ResizeObserver(() => drawWave());
+  const observer = new ResizeObserver(() => {
+    rail.setAttribute("aria-orientation", root.clientWidth < 760 ? "horizontal" : "vertical");
+    drawWave();
+    drawMap();
+    measureCues();
+  });
   observer.observe(track);
+  observer.observe(cueList);
+  observer.observe(root);
 
+  selectTab(tab);
   sizePreview();
   rebuild();
   placeTimeline();
+  coverRow.show(coverSource);
+  backgroundRow.show(backdropSource);
+  musicRow.show(musicSource);
   if (options.cover) void loadImage(options.cover).then((image) => {
     cover = image;
     rebuild();
   });
   if (options.background) void loadImage(options.background).then((image) => {
     backdrop = image;
-    backgroundKey.mark(true);
     rebuild();
   });
-  if (options.music) void setMusic(options.music).then(() => musicKey.mark(true));
+  if (options.music) void setMusic(options.music).then(() => musicRow.show(options.music!)).catch(() => musicRow.show(null));
   if (options.logo) void loadImage(options.logo).then((image) => {
     logo = image;
     rebuild();
@@ -1250,12 +1610,21 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     get range() {
       return [...range] as [number, number];
     },
-    async load(source) {
+    get duration() {
+      return duration();
+    },
+    async load(next) {
       await ready.catch(() => {});
-      await load(source);
+      await load(next);
     },
     setCaptions(next) {
+      // While tapping, the caption waiting for its tap stays the one waited for, wherever new captions put it.
+      const waiting = tapping ? cues[tapIndex] : null;
       cues = [...next].sort((a, b) => a.start - b.start);
+      if (waiting) {
+        const at = cues.findIndex((cue) => cue.text === waiting.text && Math.abs(cue.start - waiting.start) < 1e-3);
+        tapIndex = at >= 0 ? at : Math.max(0, cues.findIndex((cue) => cue.start >= waiting.start));
+      }
       rebuild();
     },
     setRange: (start, end) => setRange(start, end),
@@ -1269,27 +1638,33 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       return parts.map(([start, end]) => [start, end] as [number, number]);
     },
     setParts(next) {
+      if (exporting) return;
       parts = next.filter(([start, end]) => end > start).map(([start, end]) => [start, end]);
       renderParts();
       drawWave();
+      drawMap();
       placeTimeline();
       rebuild();
+      scheduleClip();
     },
     get source() {
-      return source;
+      return sourceInput;
     },
-    get audio() {
-      return recording ? { samples: recording.samples, sampleRate: recording.sampleRate } : null;
+    readAudio(start, end, sampleRate) {
+      return source ? source.read(start, end, sampleRate) : Promise.reject(new Error("No recording is open"));
     },
     setOverlay(next) {
       overlay = next;
       rebuild();
     },
-    slots: { captions: captionsSlot, note: noteSlot, timeline: timelineSlot },
+    selectTab,
+    slots: { header: headerSlot, actions: actionsSlot, captions: captionsSlot },
     destroy() {
       stop();
       observer.disconnect();
-      if (recording) URL.revokeObjectURL(recording.url);
+      source?.close();
+      source = null;
+      music?.close();
       root.remove();
     },
   };

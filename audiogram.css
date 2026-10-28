@@ -14,11 +14,11 @@
   --ag-wave-in: #16161a;
   --ag-stage: #e9e7e0;
   --ag-radius: 10px;
+  --ag-ease: cubic-bezier(0.23, 1, 0.32, 1);
   container-type: inline-size;
   position: relative;
   box-sizing: border-box;
   height: 100%;
-  min-height: 420px;
   overflow: hidden;
   border: 1px solid var(--ag-line);
   border-radius: var(--ag-radius);
@@ -27,90 +27,134 @@
   font-size: 13.5px;
   line-height: 1.35;
 }
+.ag *, .ag *::before, .ag *::after { box-sizing: border-box; }
+.ag-frame { display: grid; grid-template-rows: auto minmax(0, 1fr) auto auto; height: 100%; min-height: 560px; }
 .ag svg .fill { fill: currentColor; stroke: none; }
-.ag-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
-  grid-template-areas: "stage panel" "timeline timeline" "parts parts";
-  grid-template-rows: minmax(0, 1fr) auto auto;
-  height: 100%;
-}
 .ag[data-drop] { box-shadow: inset 0 0 0 2px var(--ag-accent); }
+.ag [hidden] { display: none !important; }
+.ag-hidden { display: none; }
+.ag-grow { flex: 1; }
+.ag-slot { display: contents; }
+.ag-slot-block { display: grid; gap: 8px; }
+.ag-slot-block:empty { display: none; }
 
-/* The picture */
+/* Buttons: icon-only for what everyone knows by sight, an icon with its name for everything else. */
 
-.ag-stage {
-  grid-area: stage;
-  position: relative;
-  /* Flex rather than grid, so the picture's max-height: 100% has a height to be a share of. */
-  display: flex;
+.ag-btn,
+.ag-key {
+  display: inline-flex;
+  flex: none;
   align-items: center;
   justify-content: center;
-  min-width: 0;
-  min-height: 0;
-  box-sizing: border-box;
-  padding: 20px;
-  background: var(--ag-stage);
-}
-.ag-preview {
-  display: block;
-  min-width: 0;
-  max-width: 100%;
-  max-height: 100%;
-  border-radius: 6px;
-  box-shadow: 0 2px 4px rgb(0 0 0 / 0.06), 0 22px 44px -28px rgb(0 0 0 / 0.55);
-  outline: none;
-}
-.ag-stage[data-layout="square"] .ag-preview { aspect-ratio: 1; }
-.ag-stage[data-layout="portrait"] .ag-preview { aspect-ratio: 4 / 5; }
-.ag-stage[data-layout="landscape"] .ag-preview { aspect-ratio: 16 / 9; }
-.ag-preview:focus-visible { box-shadow: 0 0 0 2px var(--ag-stage), 0 0 0 4px var(--ag-text); }
-.ag[data-tapping] .ag-preview { cursor: pointer; }
-.ag-tap-hint {
-  position: absolute;
-  left: 20px;
-  right: 20px;
-  bottom: 20px;
-  margin: 0;
-  padding: 8px 12px;
+  border: 0;
   border-radius: 8px;
-  background: var(--ag-text);
-  color: var(--ag-bg);
-  font-size: 13px;
-  text-align: center;
+  background: transparent;
+  color: var(--ag-muted);
+  font: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 120ms ease, color 120ms ease, transform 120ms var(--ag-ease), box-shadow 120ms ease;
+}
+.ag-btn { width: 34px; height: 34px; padding: 0; }
+.ag-key { gap: 7px; height: 34px; padding: 0 12px 0 10px; background: var(--ag-surface); color: var(--ag-text); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.ag-btn svg, .ag-key svg { flex: none; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.ag-btn svg { width: 19px; height: 19px; }
+@media (hover: hover) {
+  .ag-btn:not(:disabled):hover { background: var(--ag-surface); color: var(--ag-text); }
+  .ag-key:not(:disabled):hover { background: var(--ag-field); }
+}
+.ag-btn:not(:disabled):active, .ag-key:not(:disabled):active { transform: scale(0.97); }
+.ag-btn:disabled, .ag-key:disabled { opacity: 0.4; cursor: default; }
+.ag-btn:focus-visible, .ag-key:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
+.ag-key[aria-disabled="true"] { cursor: progress; }
+.ag-key[aria-pressed="true"] { background: var(--ag-accent); color: var(--ag-accent-ink); }
+
+/* The header: open on the left, the page's own controls beside it, download on the right. */
+
+.ag-header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; padding: 9px 12px; border-bottom: 1px solid var(--ag-line); }
+.ag-export { position: relative; overflow: hidden; min-width: max-content; padding: 0 16px 0 13px; background: var(--ag-accent); color: var(--ag-accent-ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+@media (hover: hover) {
+  .ag-export:not(:disabled):hover { background: var(--ag-accent); filter: brightness(0.95); }
+}
+.ag-export:disabled { opacity: 0.4; cursor: default; }
+/* While the video is made, the button fills from the bottom. */
+.ag-meter {
+  position: absolute;
+  inset: 0;
+  background: rgb(4 57 42 / 0.22);
+  transform-origin: bottom;
+  scale: 1 var(--progress, 0);
   pointer-events: none;
 }
-.ag-tap-hint[hidden] { display: none; }
-.ag-empty {
-  position: absolute;
-  max-width: 30ch;
-  margin: 0;
+
+/* The body: tools down the left, one tool's panel open beside them, and the picture. */
+
+.ag-body { display: grid; grid-template-columns: 74px 290px minmax(0, 1fr); min-height: 0; }
+.ag-rail { display: flex; flex-direction: column; gap: 2px; padding: 8px 6px; border-right: 1px solid var(--ag-line); }
+.ag-tab {
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 9px 2px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
   color: var(--ag-muted);
-  text-align: center;
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 120ms ease, color 120ms ease;
 }
-.ag:not([data-state="empty"]) .ag-empty { display: none; }
-.ag[data-state="empty"] .ag-preview { visibility: hidden; }
-
-/* The panel */
-
-.ag-panel {
-  grid-area: panel;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-  min-height: 0;
-  padding: 14px;
-  overflow-y: auto;
-  border-left: 1px solid var(--ag-line);
-  overscroll-behavior: contain;
+.ag-tab svg { width: 21px; height: 21px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+@media (hover: hover) {
+  .ag-tab:hover { color: var(--ag-text); }
 }
-.ag-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.ag-choice { display: inline-flex; gap: 2px; padding: 2px; border-radius: 10px; background: var(--ag-surface); }
-.ag-fields { display: grid; gap: 10px; }
-.ag-field { display: grid; gap: 4px; }
+.ag-tab[aria-selected="true"] { background: var(--ag-surface); color: var(--ag-text); }
+.ag-tab[aria-selected="true"] svg { color: var(--ag-accent); }
+.ag-tab:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; }
+
+.ag-drawer { min-width: 0; min-height: 0; overflow: hidden; border-right: 1px solid var(--ag-line); }
+/* Each panel is made to fit; only a very short editor, or very large text, would ever need the scroll kept here. */
+.ag-pane { display: flex; flex-direction: column; gap: 10px; height: 100%; padding: 14px; overflow-y: auto; scrollbar-gutter: auto; }
+.ag-heading { margin: 4px 0 -2px; color: var(--ag-muted); font-size: 12px; font-weight: 600; }
+.ag-heading:first-child { margin-top: 0; }
+
+/* Tiles: a choice that shows what it is and says its name. */
+.ag-tiles { display: grid; grid-template-columns: repeat(var(--ag-count, 4), minmax(0, 1fr)); gap: 6px; }
+.ag-tile {
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 3px;
+  min-height: 64px;
+  padding: 8px 4px 7px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ag-surface);
+  color: var(--ag-muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color 120ms ease, color 120ms ease, box-shadow 120ms ease;
+}
+.ag-tile svg { width: 22px; height: 22px; margin-bottom: 1px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.ag-tile-detail { color: var(--ag-muted); font-size: 10.5px; font-weight: 400; font-variant-numeric: tabular-nums; }
+@media (hover: hover) {
+  .ag-tile:hover { color: var(--ag-text); }
+}
+.ag-tile[aria-checked="true"] { background: var(--ag-bg); color: var(--ag-text); box-shadow: inset 0 0 0 1.5px var(--ag-accent); }
+.ag-tile:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
+.ag-swatches .ag-tile { min-height: 58px; }
+.ag-dot { width: 22px; height: 22px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12), 0 0 0 1px rgb(255 255 255 / 0.06); }
+
+/* Fields. */
+.ag-field { display: grid; gap: 5px; min-width: 0; }
 .ag-field-name { color: var(--ag-muted); font-size: 12px; }
 .ag-input {
-  box-sizing: border-box;
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -123,23 +167,39 @@
   font: inherit;
   outline: none;
 }
+.ag-input::placeholder { color: var(--ag-muted); opacity: 1; }
 .ag-input:focus { box-shadow: inset 0 0 0 1.5px var(--ag-text); }
 .ag-textarea { height: auto; padding: 8px 10px; resize: vertical; line-height: 1.45; }
-.ag-heading { margin: 0; font-size: 13px; font-weight: 600; }
-.ag-captions-head { display: flex; align-items: center; gap: 2px; padding-top: 4px; border-top: 1px solid var(--ag-line); }
-.ag-grow { flex: 1; }
-/* A page's own keys sit among the editor's as if they were its own; its line under the captions heading shows only
-   when it has something to say. */
-.ag-slot { display: contents; }
-.ag-note:empty { display: none; }
-.ag-links { margin: 0; padding: 0; border: 0; min-width: 0; gap: 6px; }
+.ag-links { margin: 0; padding: 0; border: 0; gap: 6px; }
 .ag-links .ag-field-name { padding: 0; }
-.ag-input::placeholder { color: var(--ag-muted); opacity: 0.7; }
-.ag-cues { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.ag-slider { width: 100%; margin: 0; accent-color: var(--ag-accent); }
+
+/* A picture or a sound: what's on now, a key to choose another, a key to take it off. */
+.ag-file { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px 10px; }
+.ag-file .ag-key { grid-row: 2; justify-self: start; }
+.ag-file .ag-choose { grid-column: 1 / span 2; }
+.ag-file .ag-take-off { grid-column: 2; justify-self: end; }
+.ag-thumb { display: grid; place-items: center; overflow: hidden; background: var(--ag-surface); color: var(--ag-muted); box-shadow: inset 0 0 0 1px var(--ag-line); }
+.ag-thumb svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.ag-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.ag-thumb-round { width: 40px; height: 40px; border-radius: 50%; }
+.ag-thumb-wide { width: 52px; height: 36px; border-radius: 6px; }
+.ag-thumb-sound { width: 40px; height: 40px; border-radius: 8px; }
+.ag-file-name { overflow: hidden; color: var(--ag-muted); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.ag-file .ag-key { height: 30px; padding: 0 10px 0 8px; font-size: 12.5px; }
+.ag-file .ag-key svg { width: 15px; height: 15px; }
+.ag-file .ag-take-off { background: none; color: var(--ag-muted); }
+
+/* Captions: the tools, a page of captions that fills what room there is, and a transcript tucked away. */
+.ag-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.ag-tools .ag-key { justify-content: flex-start; height: 32px; padding: 0 8px; font-size: 12.5px; }
+.ag-tools .ag-key svg { width: 16px; height: 16px; }
+.ag-cues { flex: 1 1 0; display: grid; align-content: start; gap: 4px; min-height: 0; margin: 0; padding: 0; overflow: hidden; list-style: none; }
 .ag-cue { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px; }
 .ag-cue[data-active] .ag-time { background: var(--ag-accent); color: var(--ag-accent-ink); }
+.ag-cues-empty { padding: 6px 0; color: var(--ag-muted); font-size: 12.5px; }
 .ag-time {
-  height: 30px;
+  height: 32px;
   padding: 0 8px;
   border: 0;
   border-radius: 8px;
@@ -151,72 +211,98 @@
   cursor: pointer;
 }
 .ag-time:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
-.ag-cue-text { height: 30px; }
-.ag-transcript { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 6px; }
-
-.ag-btn {
-  display: inline-grid;
-  flex: none;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  border: 0;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--ag-muted);
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  transition: background-color 120ms ease, color 120ms ease, transform 120ms cubic-bezier(0.23, 1, 0.32, 1);
-}
-.ag-btn svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-@media (hover: hover) {
-  .ag-btn:not(:disabled):hover { background: var(--ag-surface); color: var(--ag-text); }
-}
-.ag-btn:not(:disabled):active { transform: scale(0.96); }
-.ag-btn:disabled { opacity: 0.4; cursor: default; }
-.ag-btn:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; }
-.ag-btn[aria-checked="true"],
-.ag-btn[aria-pressed="true"] { background: var(--ag-bg); color: var(--ag-text); box-shadow: 0 0 0 1px var(--ag-edge), 0 1px 2px rgb(0 0 0 / 0.06); }
-.ag-tap[aria-pressed="true"] { background: var(--ag-accent); color: var(--ag-accent-ink); box-shadow: none; }
-.ag-swatch { width: 34px; }
-.ag-dot { width: 20px; height: 20px; border-radius: 50%; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12); }
+.ag-cue-text { height: 32px; }
 .ag-remove { width: 30px; height: 30px; }
 .ag-remove svg { width: 15px; height: 15px; }
-.ag-hidden { display: none; }
+.ag-pager { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: -4px; }
+.ag-pager .ag-btn { width: 30px; height: 30px; }
+.ag-page { color: var(--ag-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ag-more { display: grid; gap: 8px; border-top: 1px solid var(--ag-line); padding-top: 10px; }
+.ag-more summary { color: var(--ag-muted); font-size: 12.5px; cursor: pointer; }
+.ag-more summary:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 2px; border-radius: 4px; }
+.ag-more[open] summary { color: var(--ag-text); }
+.ag-more .ag-key { justify-self: start; height: 30px; font-size: 12.5px; }
+.ag-help { margin: 0; color: var(--ag-muted); font-size: 12px; text-wrap: pretty; }
 
-/* The recording */
+/* The picture. */
 
-.ag-timeline {
-  grid-area: timeline;
+.ag-stage {
+  position: relative;
+  /* Flex rather than grid, so the picture's max-height: 100% has a height to be a share of. */
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--ag-line);
+  justify-content: center;
+  min-width: 0;
+  min-height: 0;
+  padding: 24px;
+  background: var(--ag-stage);
+  contain: size;
 }
+.ag-preview {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 6px;
+  box-shadow: 0 2px 4px rgb(0 0 0 / 0.06), 0 22px 44px -28px rgb(0 0 0 / 0.55);
+  outline: none;
+}
+.ag-stage[data-layout="square"] .ag-preview { aspect-ratio: 1; }
+.ag-stage[data-layout="portrait"] .ag-preview { aspect-ratio: 4 / 5; }
+.ag-stage[data-layout="story"] .ag-preview { aspect-ratio: 9 / 16; }
+.ag-stage[data-layout="landscape"] .ag-preview { aspect-ratio: 16 / 9; }
+.ag-preview:focus-visible { box-shadow: 0 0 0 2px var(--ag-stage), 0 0 0 4px var(--ag-text); }
+.ag[data-tapping] .ag-preview { cursor: pointer; }
+.ag-tap-hint, .ag-notice {
+  position: absolute;
+  left: 20px;
+  right: 20px;
+  bottom: 20px;
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--ag-text);
+  color: var(--ag-bg);
+  font-size: 13px;
+  text-align: center;
+  text-wrap: pretty;
+  pointer-events: none;
+}
+.ag-empty {
+  position: absolute;
+  max-width: 30ch;
+  margin: 0;
+  color: var(--ag-muted);
+  text-align: center;
+  text-wrap: balance;
+}
+.ag:not([data-state="empty"]) .ag-empty { display: none; }
+.ag[data-state="empty"] .ag-preview { visibility: hidden; }
+.ag[data-state="loading"] .ag-preview { opacity: 0.55; transition: opacity 200ms ease; }
+
+/* The recording. */
+
+.ag-timeline { display: grid; gap: 8px; padding: 9px 12px 12px; border-top: 1px solid var(--ag-line); }
+.ag-transport { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; min-width: 0; }
 .ag-play { background: var(--ag-text); color: var(--ag-bg); }
 @media (hover: hover) {
   .ag-play:not(:disabled):hover { background: var(--ag-text); color: var(--ag-bg); opacity: 0.88; }
 }
-.ag-clock { flex: none; min-width: 92px; color: var(--ag-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ag-clock { flex: none; color: var(--ag-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ag-reading { overflow: hidden; color: var(--ag-muted); font-size: 12px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.ag-reading:empty { display: none; }
+.ag-zoom-keys { display: inline-flex; align-items: center; gap: 2px; }
+.ag-zoom-name { margin-right: 2px; color: var(--ag-muted); font-size: 12px; }
+.ag-fit { height: 30px; padding: 0 9px 0 7px; font-size: 12.5px; }
+.ag-add-part { height: 32px; font-size: 12.5px; }
 
-/* The parts of a clip made of several: one chip each, in order, under the recording. */
-.ag-parts { grid-area: parts; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0 12px 10px; list-style: none; }
-.ag-parts:empty { display: none; }
-.ag-part { display: inline-flex; align-items: center; border-radius: 8px; background: var(--ag-surface); box-shadow: 0 0 0 1px var(--ag-line); touch-action: none; }
-.ag-part-pick { padding: 7px 4px 7px 10px; border: 0; background: none; color: var(--ag-text); font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: grab; }
-.ag-part-pick:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; border-radius: 6px; }
-.ag-part .ag-part-remove { width: 28px; height: 28px; }
-.ag-part .ag-part-remove svg { width: 15px; height: 15px; }
-.ag[data-reordering] .ag-part-pick { cursor: grabbing; }
-
-/* The music's level, under the keys that set the look. */
-.ag-music-level { display: grid; gap: 6px; }
-.ag-music-level[hidden] { display: none; }
-.ag-slider { width: 100%; margin: 0; accent-color: var(--ag-accent); }
-/* The playhead's strip over the recording, then the recording; the playhead runs down through both. */
-.ag-lane { position: relative; display: grid; flex: 1; gap: 4px; min-width: 0; }
+.ag-lane { display: grid; gap: 6px; min-width: 0; }
+/* The overview, while zoomed in: the whole recording, and a frame round what the waveform shows. */
+.ag-map { position: relative; height: 20px; border-radius: 4px; background: var(--ag-surface); cursor: pointer; touch-action: none; }
+.ag-map-wave { position: absolute; inset: 0; width: 100%; height: 100%; }
+.ag-map-view { position: absolute; top: 0; bottom: 0; border-radius: 4px; background: rgb(127 127 127 / 0.12); box-shadow: inset 0 0 0 1.5px var(--ag-text); pointer-events: none; }
+/* The playhead's strip over the waveform; the playhead runs down through both, and both clip at the view's edges. */
+.ag-zoomed { position: relative; display: grid; gap: 4px; min-width: 0; overflow-x: clip; overflow-y: visible; }
 .ag-scrub {
   position: relative;
   height: 18px;
@@ -250,7 +336,6 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  box-sizing: border-box;
   border-radius: 6px;
   background: rgb(47 240 184 / 0.22);
   box-shadow: inset 0 0 0 1.5px var(--ag-accent);
@@ -301,27 +386,23 @@
   background: var(--ag-text);
   box-shadow: 0 0 0 2px var(--ag-bg), 0 1px 3px rgb(0 0 0 / 0.3);
   translate: -50% -1px;
-  transition: scale 150ms cubic-bezier(0.23, 1, 0.32, 1);
+  transition: scale 150ms var(--ag-ease);
 }
 @media (hover: hover) {
-  .ag-lane:has(.ag-scrub:hover) .ag-knob { scale: 1.2; }
+  .ag-zoomed:has(.ag-scrub:hover) .ag-knob { scale: 1.2; }
 }
 .ag[data-scrubbing] .ag-knob { scale: 1.35; }
 .ag[data-scrubbing] .ag-scrub { cursor: grabbing; }
-.ag-export { position: relative; overflow: hidden; background: var(--ag-accent); color: var(--ag-accent-ink); }
-@media (hover: hover) {
-  .ag-export:not(:disabled):hover { background: var(--ag-accent); color: var(--ag-accent-ink); filter: brightness(0.95); }
-}
-.ag-export:disabled { opacity: 1; cursor: progress; }
-/* While the video is made, the button fills from the bottom. */
-.ag-meter {
-  position: absolute;
-  inset: 0;
-  background: rgb(4 57 42 / 0.22);
-  transform-origin: bottom;
-  scale: 1 var(--progress, 0);
-  pointer-events: none;
-}
+
+/* The parts of a clip made of several: one chip each, in order, under the recording. */
+.ag-parts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0 12px 10px; list-style: none; }
+.ag-parts:empty { display: none; }
+.ag-part { display: inline-flex; align-items: center; border-radius: 8px; background: var(--ag-surface); box-shadow: 0 0 0 1px var(--ag-line); touch-action: none; }
+.ag-part-pick { padding: 7px 4px 7px 10px; border: 0; background: none; color: var(--ag-text); font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: grab; }
+.ag-part-pick:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; border-radius: 6px; }
+.ag-part .ag-part-remove { width: 28px; height: 28px; }
+.ag-part .ag-part-remove svg { width: 15px; height: 15px; }
+.ag[data-reordering] .ag-part-pick { cursor: grabbing; }
 
 .ag-live {
   position: absolute;
@@ -332,23 +413,32 @@
   white-space: nowrap;
 }
 
-/* Narrow: the picture on top, the recording under it, and the choices below. */
-@container (max-width: 720px) {
-  .ag-grid {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "stage" "timeline" "parts" "panel";
-    grid-template-rows: auto auto auto minmax(0, 1fr);
-  }
-  .ag-stage { padding: 12px; }
-  .ag-preview { max-height: 46vh; }
-  .ag-panel { border-left: 0; border-top: 1px solid var(--ag-line); }
-  .ag-clock { min-width: 0; margin-right: auto; }
-  .ag-timeline { flex-wrap: wrap; }
-  .ag-lane { order: 5; flex: 1 0 100%; }
+/* Narrow: the picture first, the recording under it, the tools as a row of tabs, and the open tool's panel below;
+   the page scrolls rather than any panel. */
+@container (max-width: 760px) {
+  .ag-frame { display: flex; flex-direction: column; height: auto; min-height: 0; }
+  .ag-stage { contain: none; }
+  .ag-body { display: contents; }
+  .ag-header { order: 0; padding: 8px 10px; }
+  .ag-stage { order: 1; padding: 12px; }
+  .ag-preview { max-height: 52vh; }
+  .ag-timeline { order: 2; padding: 8px 10px 10px; }
+  .ag-parts { order: 3; padding: 0 10px 10px; }
+  .ag-rail { order: 4; flex-direction: row; justify-content: space-between; padding: 6px; border-top: 1px solid var(--ag-line); border-right: 0; border-bottom: 1px solid var(--ag-line); }
+  .ag-tab { flex: 1; }
+  .ag-drawer { order: 5; overflow: visible; border-right: 0; }
+  .ag-pane { height: auto; }
+  .ag-cues { flex: none; overflow: visible; }
+  .ag-key-text { font-size: 12.5px; }
 }
 
 @media (pointer: coarse) {
   .ag-btn { width: 40px; height: 40px; }
+  .ag-key { height: 40px; }
+  .ag-tools .ag-key, .ag-file .ag-key, .ag-more .ag-key, .ag-time, .ag-cue-text, .ag-add-part, .ag-fit { height: 40px; }
+  .ag-pager .ag-btn, .ag-part .ag-part-remove, .ag-cue .ag-remove { width: 40px; height: 40px; }
+  .ag-more summary { padding: 10px 0; }
+  .ag-map { height: 28px; }
   .ag-input { font-size: 16px; }
   .ag-handle { width: 20px; margin-left: -10px; }
   .ag-scrub { height: 26px; }
@@ -356,6 +446,13 @@
   .ag-knob { width: 16px; height: 16px; translate: -50% 1px; }
 }
 
+/* Forced colours drop box shadows, so focus and the chosen tile get outlines there. */
+@media (forced-colors: active) {
+  .ag-input:focus, .ag-scrub:focus-visible, .ag-handle:focus-visible, .ag-preview:focus-visible { outline: 2px solid Highlight; }
+  .ag-tile[aria-checked="true"], .ag-tab[aria-selected="true"] { outline: 2px solid Highlight; outline-offset: -2px; }
+  .ag-selection { outline: 2px solid Highlight; }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .ag-btn, .ag-knob { transition: none; }
+  .ag-btn, .ag-key, .ag-tab, .ag-tile, .ag-knob { transition: none; }
 }

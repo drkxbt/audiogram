@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fft, peaks, rms, spectrum, Smoother } from "../dist/wave.js";
 import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, parseTime, spread, timeWords, toSRT, toVTT } from "../dist/captions.js";
 import { mux } from "../dist/mp4.js";
-import { Painter, THEMES } from "../dist/render.js";
+import { Painter, SIZES, THEMES } from "../dist/render.js";
 
 const close = (actual, expected, tolerance = 1e-6, message) => assert.ok(Math.abs(actual - expected) <= tolerance, message ?? `${actual} ≉ ${expected}`);
 
@@ -232,7 +232,7 @@ function recordingContext(width, height) {
     get: (_, key) => {
       if (key === "canvas") return { width, height };
       if (key === "drawImage") return (image, ...rect) => calls.push({ op: "drawImage", image, rect });
-      if (key === "fillText") return (text) => calls.push({ op: "fillText", text });
+      if (key === "fillText") return (text, x, y) => calls.push({ op: "fillText", text, x, y });
       return any;
     },
     set: () => true,
@@ -270,4 +270,15 @@ test("the frame shows the clip's time by the visual and the links along the bott
   const texts = calls.filter((call) => call.op === "fillText").map((call) => call.text);
   assert.ok(texts.includes("0:01 / 0:06"), texts.join(" | "));
   assert.ok(texts.includes("drk.vc  ·  x.com/drkxbt"), texts.join(" | "));
+});
+
+test("a 9:16 story is 1080 by 1920, and its name, visual and captions stack down it without overlapping", () => {
+  assert.deepEqual(SIZES.story, { width: 1080, height: 1920 });
+  const { ctx, calls } = recordingContext(1080, 1920);
+  const cue = { start: 0, end: 5, text: "Ship small and ship often" };
+  new Painter({ ...sceneFor(undefined), layout: "story", title: "A title", captions: [cue] }).paint(ctx, 1);
+  const at = (text) => calls.find((call) => call.op === "fillText" && call.text.includes(text));
+  assert.ok(at("drk") && at("A title") && at("Ship"), calls.filter((call) => call.op === "fillText").map((call) => call.text).join(" | "));
+  assert.ok(at("drk").y < at("A title").y && at("A title").y < at("0:01 / 0:06").y && at("0:01 / 0:06").y < at("Ship").y);
+  assert.ok(at("Ship").y < 1920 - 1080 * 0.074);
 });

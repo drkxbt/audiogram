@@ -3,3 +3,4 @@ dist/
 package-lock.json
 .impeccable/
 *.log
+demo/sample/long.mp3

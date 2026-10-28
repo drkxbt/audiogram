@@ -33,7 +33,11 @@ export function recordingTimeAt(parts: Parts, time: number): number {
  * the clip's own start and end are left as they are.
  */
 export function stitch(samples: Float32Array, sampleRate: number, parts: Parts, fade = 0.15): Float32Array {
-  const pieces = parts.map(([start, end]) => samples.subarray(Math.max(0, Math.round(start * sampleRate)), Math.min(samples.length, Math.round(end * sampleRate))));
+  return joinParts(parts.map(([start, end]) => samples.subarray(Math.max(0, Math.round(start * sampleRate)), Math.min(samples.length, Math.round(end * sampleRate)))), sampleRate, fade);
+}
+
+/** Pieces of sound end to end, each join faded out and back in over `fade` seconds; the ends are left as they are. */
+export function joinParts(pieces: Float32Array[], sampleRate: number, fade = 0.15): Float32Array {
   const out = new Float32Array(pieces.reduce((sum, piece) => sum + piece.length, 0));
   let at = 0;
   pieces.forEach((piece, index) => {

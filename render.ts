@@ -1,13 +1,14 @@
 import { cueAt, timeWords, type Cue } from "./captions.js";
 import { rms, Smoother, spectrum } from "./wave.js";
 
-export type Layout = "square" | "portrait" | "landscape";
+export type Layout = "square" | "portrait" | "story" | "landscape";
 export type Visual = "bars" | "wave" | "pulse";
 
-/** Video sizes that X shows without cropping. */
+/** Video sizes: square and 4:5 for feeds, 9:16 for TikTok, Reels and Shorts, 16:9 for YouTube and LinkedIn. */
 export const SIZES: Record<Layout, { width: number; height: number }> = {
   square: { width: 1080, height: 1080 },
   portrait: { width: 1080, height: 1350 },
+  story: { width: 1080, height: 1920 },
   landscape: { width: 1920, height: 1080 },
 };
 
@@ -94,8 +95,8 @@ function arrange(layout: Layout, width: number, height: number) {
     };
   }
   const inner = width - pad * 2;
-  const headerHeight = height * (layout === "portrait" ? 0.24 : 0.25);
-  const visualHeight = height * (layout === "portrait" ? 0.26 : 0.22);
+  const headerHeight = height * (layout === "story" ? 0.2 : layout === "portrait" ? 0.24 : 0.25);
+  const visualHeight = height * (layout === "story" ? 0.2 : layout === "portrait" ? 0.26 : 0.22);
   const header = { x: pad, y: pad, width: inner, height: headerHeight };
   const visual = { x: pad, y: header.y + headerHeight + pad * 0.4, width: inner, height: visualHeight };
   const captionsTop = visual.y + visualHeight + pad * 0.5;

@@ -2,7 +2,10 @@ export { fft, peaks, rms, spectrum, Smoother, type SpectrumOptions } from "./wav
 export { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, parseTime, spread, timeWords, toSRT, toVTT, type Cue, type Word } from "./captions.js";
 export { mux, type AudioTrack, type Sample, type Track, type VideoTrack } from "./mp4.js";
 export { mixMusic, type MusicOptions } from "./mix.js";
-export { clipTimeAt, partsLength, recordingTimeAt, stitch, stitchCues, type Parts } from "./parts.js";
+export { clipTimeAt, joinParts, partsLength, recordingTimeAt, stitch, stitchCues, type Parts } from "./parts.js";
+export { OUTLINE_RATE, openSource, type AudioSource, type SourceOptions } from "./source.js";
+export { frameSpan, indexMp3, parseWav, wavHeader, type FrameSpan, type Mp3Index, type WavInfo } from "./mp3.js";
+export { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
 export { Painter, SIZES, THEMES, wrap, type Layout, type Overlay, type OverlayFrame, type Scene, type Theme, type Visual } from "./render.js";
 export { canExportMp4, exportClip, type ExportOptions, type ExportResult } from "./export.js";
-export { audiogram, type Editor, type EditorOptions, type Labels, type Settings } from "./editor.js";
+export { audiogram, type Editor, type EditorOptions, type Labels, type Settings, type Tab } from "./editor.js";
