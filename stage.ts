@@ -3,8 +3,9 @@
    words again to type them, and use the bar above the picture for the font, the size, the colour and the rest. With the
    keyboard, Tab steps through the layers on the picture and Enter types into words. */
 
-import { layerAt, moveLayer, resizeTurned, rotateLayer, snapMove, type Guide, type Handle, type Layer } from "./layers.js";
-import { paintOf, type Theme } from "./render.js";
+import { formatTime, parseTime } from "./captions.js";
+import { alignToPage, layerAt, moveLayer, resizeTurned, rotateLayer, snapMove, type Entrance, type Guide, type Handle, type Layer, type PageEdge } from "./layers.js";
+import { paintOf, type Theme, type Visual } from "./render.js";
 import { element, iconButton, ICONS, keyButton } from "./ui.js";
 
 /** A font the editor offers: its family as the canvas names it, and its files, each loaded only when needed. */
@@ -60,6 +61,40 @@ export interface StageLabels {
   hidden: (layer: string) => string;
   deleted: (layer: string) => string;
   duplicated: (layer: string) => string;
+  effects: string;
+  shadow: string;
+  outline: string;
+  behind: string;
+  capitals: string;
+  none: string;
+  animate: string;
+  enterNames: Record<Entrance, string>;
+  timing: string;
+  showFrom: string;
+  showUntil: string;
+  playhead: string;
+  wholeClip: string;
+  timeHint: string;
+  flip: string;
+  flipX: string;
+  flipY: string;
+  adjust: string;
+  brightness: string;
+  contrast: string;
+  saturation: string;
+  blur: string;
+  resetAdjust: string;
+  setBackground: string;
+  lock: string;
+  unlock: string;
+  locked: (layer: string) => string;
+  alignPage: string;
+  edgeNames: Record<PageEdge, string>;
+  copy: string;
+  paste: string;
+  copied: (layer: string) => string;
+  style: string;
+  visualNames: Record<Visual, string>;
 }
 
 export interface StageHost {
@@ -90,6 +125,8 @@ export interface StageHost {
   open(layer: Layer): boolean;
   /** Puts another picture in a picture layer or the profile picture. */
   replace(layer: Layer): void;
+  /** Where the playhead is, in seconds into the clip, for a layer's times. */
+  time(): number;
 }
 
 export interface Stage {
@@ -104,7 +141,11 @@ export interface Stage {
 const TEXT_KINDS = new Set(["name", "handle", "title", "links", "time", "text", "captions"]);
 const TYPED_KINDS = new Set(["name", "handle", "title", "text"]);
 const SINGLE_LINE = new Set(["name", "handle"]);
-const ADDED_KINDS = new Set(["text", "image", "shape"]);
+// Words that can be typed in a letter at a time: everything with words but the captions, which keep their own timing.
+const TYPEWRITER_KINDS = new Set(["name", "handle", "title", "links", "time", "text"]);
+const PICTURE_KINDS = new Set(["image", "video"]);
+const EDGES: Array<[PageEdge, keyof typeof ICONS]> = [["left", "alignLeft"], ["center", "alignCenter"], ["right", "alignRight"], ["top", "alignTop"], ["middle", "alignMiddle"], ["bottom", "alignBottom"]];
+const ENTRANCES: Entrance[] = ["fade", "rise", "pop", "slide", "typewriter"];
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const PALETTE = ["#ffffff", "#111111", "#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#2ff0b8", "#0a84ff", "#5e5ce6", "#bf5af2", "#ff2d55", "#8e8e93"];
 const ALIGN_ICONS = {
@@ -115,6 +156,8 @@ const ALIGN_ICONS = {
 
 let made = 0;
 const newId = (kind: string) => `${kind}-${Date.now().toString(36)}${(made++).toString(36)}`;
+// The layer Copy took, ready to paste into any picture on the page.
+let clipboard: Layer | null = null;
 let pops = 0;
 
 /** The heaviest weight a font's files cover: 900 for a variable 100–900 font, 400 for a single regular file. */
@@ -188,9 +231,11 @@ export function createStage(host: StageHost): Stage {
       const { width, height } = size();
       box.toggleAttribute("data-words", TEXT_KINDS.has(layer.kind));
       // Pictures keep their shape, so only their corners pull.
-      box.toggleAttribute("data-keep", layer.kind === "image" || layer.kind === "avatar");
+      box.toggleAttribute("data-keep", PICTURE_KINDS.has(layer.kind) || layer.kind === "avatar");
       // Too small for side handles: the corners are enough, and easier to hit.
       box.toggleAttribute("data-small", layer.w * width < 48 || layer.h * height < 48);
+      // Locked: outlined, with no handles to pull.
+      box.toggleAttribute("data-locked", layer.locked === true);
     }
     toolbar.hidden = !layer || !host.enabled();
   }
@@ -204,8 +249,16 @@ export function createStage(host: StageHost): Stage {
     }));
   }
 
+  // Set while the stage makes a change of its own, which its bar and pop-over already show.
+  let changing = false;
   function replaceLayer(layer: Layer, done: boolean) {
-    host.change(host.layers().map((item) => (item.id === layer.id ? layer : item)), done);
+    changing = true;
+    try {
+      host.change(host.layers().map((item) => (item.id === layer.id ? layer : item)), done);
+    } finally {
+      changing = false;
+    }
+    if (layer.id === selectedId) toolbarFor = JSON.stringify(find(layer.id));
     draw();
   }
 
@@ -241,7 +294,8 @@ export function createStage(host: StageHost): Stage {
       select(start?.id ?? null);
       if (event.pointerType === "touch" && !already) return;
     }
-    if (!start) return;
+    // A locked layer is picked, to be unlocked, but stays where it is.
+    if (!start || start.locked) return;
     gesture = { kind, pointerId: event.pointerId, x: event.clientX, y: event.clientY, start, handle: kind === "resize" ? (handle as Handle) : undefined, moved: false, wasSelected: current?.id === start.id };
     try {
       overlay.setPointerCapture(event.pointerId);
@@ -286,7 +340,7 @@ export function createStage(host: StageHost): Stage {
     } else {
       const corner = gesture.handle!.length === 2;
       // Pictures and the profile picture keep their shape; words keep theirs from a corner, and grow with it.
-      const keep = event.shiftKey || start.kind === "image" || start.kind === "avatar" || (corner && TEXT_KINDS.has(start.kind));
+      const keep = event.shiftKey || PICTURE_KINDS.has(start.kind) || start.kind === "avatar" || (corner && TEXT_KINDS.has(start.kind));
       next = resizeTurned(start, gesture.handle!, dx, dy, keep, width, height);
       if (corner && TEXT_KINDS.has(start.kind) && start.size) next = { ...next, size: Math.max(8, Math.round(start.size * (next.w / start.w))) };
     }
@@ -325,13 +379,14 @@ export function createStage(host: StageHost): Stage {
 
   /** Types into words, or opens the panel where a layer's words or picture come from. */
   function openLayer(layer: Layer) {
+    if (layer.locked) return;
     if (TYPED_KINDS.has(layer.kind)) editText(layer.id);
     else if (layer.kind === "image" || layer.kind === "avatar") host.replace(layer);
     else host.open(layer);
   }
 
   // Keys on the picture. Tab steps through the layers and on past the last; arrows nudge a pixel (ten with Shift);
-  // Enter types into words; Delete removes; Ctrl or Cmd with D duplicates; Escape lets go.
+  // Enter types into words; Delete removes; Ctrl or Cmd with D duplicates, C copies, X cuts and V pastes; Escape lets go.
   let nudgeTimer = 0;
   overlay.addEventListener("keydown", (event) => {
     if (event.target === typing || !host.enabled()) return;
@@ -350,6 +405,12 @@ export function createStage(host: StageHost): Stage {
       select(order[next].id);
       return;
     }
+    const command = event.ctrlKey || event.metaKey;
+    if (command && event.key.toLowerCase() === "v" && clipboard) {
+      event.preventDefault();
+      paste();
+      return;
+    }
     if (!layer) {
       const order = visible();
       if ((event.key === "Enter" || event.key === "ArrowDown") && order.length) {
@@ -358,6 +419,15 @@ export function createStage(host: StageHost): Stage {
       }
       return;
     }
+    if (command && (event.key.toLowerCase() === "c" || event.key.toLowerCase() === "x")) {
+      event.preventDefault();
+      copy(layer);
+      if (event.key.toLowerCase() === "x" && !layer.locked) removeLayer(layer);
+      return;
+    }
+    if (event.key === "Escape") return select(null);
+    // A locked layer keeps still: only Tab, Escape and Copy reach it.
+    if (layer.locked) return;
     const { width, height } = size();
     const step = event.shiftKey ? 10 : 1;
     const nudge: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
@@ -374,8 +444,7 @@ export function createStage(host: StageHost): Stage {
     } else if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
       removeLayer(layer);
-    } else if (event.key === "Escape") select(null);
-    else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
+    } else if (command && event.key.toLowerCase() === "d") {
       event.preventDefault();
       duplicate(layer);
     } else if (event.key === "Enter") {
@@ -394,6 +463,8 @@ export function createStage(host: StageHost): Stage {
     editing = id;
     host.setEditing(id);
     placeTyping(layer);
+    // Words shown in capitals are typed in capitals too.
+    typing.style.textTransform = layer.uppercase ? "uppercase" : "";
     typing.setAttribute("aria-label", labels.typing(host.layerName(layer)));
     typing.value = host.textOf(layer);
     typing.hidden = false;
@@ -461,27 +532,51 @@ export function createStage(host: StageHost): Stage {
 
   // Changes from the bar and the keys.
 
+  // Any layer can go: the Elements panel adds back the name, the captions or anything else. The last captions layer
+  // is hidden rather than deleted, so captions arriving later, this visit or the next, don't put one back.
   function removeLayer(layer: Layer) {
     const name = host.layerName(layer);
-    if (ADDED_KINDS.has(layer.kind)) {
-      host.change(host.layers().filter((item) => item.id !== layer.id), true);
-      host.announce(labels.deleted(name));
-    } else {
+    if (layer.kind === "captions" && !host.layers().some((other) => other.kind === "captions" && other.id !== layer.id && !other.hidden)) {
       replaceLayer({ ...layer, hidden: true }, true);
       host.announce(labels.hidden(name));
+    } else {
+      host.change(host.layers().filter((item) => item.id !== layer.id), true);
+      host.announce(labels.deleted(name));
     }
     select(null);
     overlay.focus({ preventScroll: true });
   }
 
   function duplicate(layer: Layer) {
-    if (!ADDED_KINDS.has(layer.kind)) return;
-    const copy = { ...moveLayer(layer, 0.03, 0.03), id: newId(layer.kind) };
+    const twin = { ...moveLayer(layer, 0.03, 0.03), id: newId(layer.kind), locked: false };
     const list = host.layers();
     const at = list.findIndex((item) => item.id === layer.id);
-    host.change([...list.slice(0, at + 1), copy, ...list.slice(at + 1)], true);
-    select(copy.id);
+    host.change([...list.slice(0, at + 1), twin, ...list.slice(at + 1)], true);
+    select(twin.id);
     host.announce(labels.duplicated(host.layerName(layer)));
+  }
+
+  function copy(layer: Layer) {
+    clipboard = { ...layer };
+    host.announce(labels.copied(host.layerName(layer)));
+  }
+
+  /** The copied layer, on top, a little down and to the right of where it was so the two can be told apart. */
+  function paste() {
+    if (!clipboard) return;
+    const twin = { ...moveLayer(clipboard, 0.03, 0.03), id: newId(clipboard.kind), hidden: false, locked: false };
+    clipboard = twin;
+    host.change([...host.layers(), twin], true);
+    select(twin.id);
+    host.announce(labels.duplicated(host.layerName(twin)));
+  }
+
+  /** A picture or video stretched over the whole page and sent to the back. */
+  function setAsBackground(layer: Layer) {
+    const full = { ...layer, x: 0, y: 0, w: 1, h: 1, rotation: 0, radius: 0 };
+    host.change([full, ...host.layers().filter((item) => item.id !== layer.id)], true);
+    buildToolbar(find(layer.id));
+    draw();
   }
 
   function reorder(layer: Layer, step: number) {
@@ -507,7 +602,8 @@ export function createStage(host: StageHost): Stage {
     popFor?.setAttribute("aria-expanded", "false");
     popFor = null;
   }
-  function openPop(anchor: HTMLElement, name: string, content: HTMLElement[]) {
+  /** Opens a pop-over under `anchor`, focused on the control keyed `focus` when it is rebuilt after a change. */
+  function openPop(anchor: HTMLElement, name: string, content: HTMLElement[], focus?: string) {
     if (popFor === anchor) return closePop();
     closePop();
     popFor = anchor;
@@ -519,7 +615,8 @@ export function createStage(host: StageHost): Stage {
     const at = anchor.getBoundingClientRect();
     pop.style.top = `${at.bottom - stage.top + 6}px`;
     pop.style.left = `${Math.max(8, Math.min(stage.width - pop.offsetWidth - 8, at.left - stage.left))}px`;
-    (pop.querySelector<HTMLElement>("[aria-pressed=true], input[type=search], button, input") ?? pop).focus();
+    const kept = focus ? [...pop.querySelectorAll<HTMLElement>("[data-pop-key]")].find((node) => node.dataset.popKey === focus) : null;
+    (kept ?? pop.querySelector<HTMLElement>("[aria-pressed=true]") ?? pop.querySelector<HTMLElement>("input[type=search], button, input") ?? pop).focus();
   }
   const anchorKey = () => popFor?.dataset.key;
   /** Focus back on the bar's control with this key, wherever the bar was rebuilt. */
@@ -678,7 +775,8 @@ export function createStage(host: StageHost): Stage {
     list.querySelector<HTMLElement>("[aria-selected=true]")?.scrollIntoView({ block: "nearest" });
   }
 
-  function slider(name: string, value: number, apply: (value: number) => void) {
+  /** A slider showing `value` times `scale` (a percent by default), up to `max`. */
+  function slider(name: string, value: number, apply: (value: number) => void, { max = 100, scale = 100, suffix = "%" } = {}) {
     const label = element("label", "ag-field");
     const head = element("span", "ag-field-head");
     const text = element("span", "ag-field-name");
@@ -688,16 +786,16 @@ export function createStage(host: StageHost): Stage {
     const input = element("input", "ag-slider");
     input.type = "range";
     input.min = "0";
-    input.max = "100";
+    input.max = String(max);
     const show = () => {
-      shown.textContent = `${input.value}%`;
-      input.setAttribute("aria-valuetext", `${input.value}%`);
+      shown.textContent = `${input.value}${suffix}`;
+      input.setAttribute("aria-valuetext", `${input.value}${suffix}`);
     };
-    input.value = String(Math.round(value * 100));
+    input.value = String(Math.round(value * scale));
     show();
     input.addEventListener("input", () => {
       show();
-      apply(Number(input.value) / 100);
+      apply(Number(input.value) / scale);
     });
     // A slider's drag is one step to undo, ended when it is let go.
     input.addEventListener("change", () => host.change(host.layers(), true));
@@ -735,25 +833,204 @@ export function createStage(host: StageHost): Stage {
 
   function morePop(anchor: HTMLElement, layer: Layer) {
     const actions = element("div", "ag-pop-actions");
+    // The pop-over takes its focus with it as it closes; the bar's More key, or the picture once the bar has gone, gets
+    // it back unless the action put it somewhere itself.
+    const settle = () => {
+      if (!document.activeElement || document.activeElement === document.body) (toolbar.querySelector<HTMLElement>('[data-key="more"]') ?? overlay).focus({ preventScroll: true });
+    };
     const act = (text: string, markup: string, run: () => void) => {
       const button = keyButton("", text, markup);
       button.addEventListener("click", () => {
         run();
         closePop();
+        settle();
       });
       return button;
     };
-    actions.append(act(labels.forward, ICONS.forward, () => reorder(find(layer.id)!, 1)), act(labels.backward, ICONS.backward, () => reorder(find(layer.id)!, -1)));
-    if (ADDED_KINDS.has(layer.kind)) actions.append(act(labels.duplicate, ICONS.duplicate, () => duplicate(find(layer.id)!)));
+    actions.append(
+      act(labels.forward, ICONS.forward, () => reorder(find(layer.id)!, 1)),
+      act(labels.backward, ICONS.backward, () => reorder(find(layer.id)!, -1)),
+      act(labels.duplicate, ICONS.duplicate, () => duplicate(find(layer.id)!)),
+      act(labels.copy, ICONS.copy, () => copy(find(layer.id)!)),
+    );
+    if (clipboard) actions.append(act(labels.paste, ICONS.paste, paste));
+    actions.append(act(labels.lock, ICONS.lock, () => lock(find(layer.id)!, true)));
     if (layer.rotation) actions.append(act(labels.straighten, ICONS.reset, () => update(find(layer.id)!, { rotation: 0 })));
-    const content: HTMLElement[] = [actions, slider(labels.opacity, layer.opacity ?? 1, (value) => replaceLayer({ ...find(layer.id)!, opacity: value }, false))];
-    if (layer.kind === "image" || (layer.kind === "shape" && layer.shape !== "ellipse")) {
+    const name = element("p", "ag-pop-name");
+    name.textContent = labels.alignPage;
+    const edges = element("div", "ag-edge-grid");
+    for (const [edge, markup] of EDGES) {
+      const button = keyButton("", labels.edgeNames[edge], ICONS[markup]);
+      button.addEventListener("click", () => {
+        const { width, height } = host.frameSize();
+        update(find(layer.id)!, alignToPage(find(layer.id)!, edge, width, height));
+        settle();
+      });
+      edges.append(button);
+    }
+    const content: HTMLElement[] = [actions, name, edges, slider(labels.opacity, layer.opacity ?? 1, (value) => replaceLayer({ ...find(layer.id)!, opacity: value }, false))];
+    if (PICTURE_KINDS.has(layer.kind) || (layer.kind === "shape" && (!layer.shape || layer.shape === "rect"))) {
       content.push(slider(labels.corners, (layer.radius ?? 0) * 2, (value) => replaceLayer({ ...find(layer.id)!, radius: value / 2 }, false)));
     }
     const heading = element("p", "ag-pop-name");
     heading.textContent = labels.position;
     content.push(heading, positionFields(layer));
     openPop(anchor, labels.more, content);
+  }
+
+  function lock(layer: Layer, locked: boolean) {
+    update(layer, { locked });
+    if (locked) host.announce(labels.locked(host.layerName(layer)));
+    focusKey(locked ? "unlock" : "more");
+  }
+
+  const popName = (text: string) => {
+    const node = element("p", "ag-pop-name");
+    node.textContent = text;
+    return node;
+  };
+
+  /** A key that is on or off, for a pop-over. */
+  const toggleKey = (text: string, markup: string, on: boolean, run: () => void) => {
+    const button = keyButton("", text, markup);
+    button.dataset.popKey = text;
+    button.setAttribute("aria-pressed", String(on));
+    button.addEventListener("click", run);
+    return button;
+  };
+  /** The pop-over control that has focus, to find it again once the pop-over is rebuilt. */
+  const popFocus = () => (pop.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.popKey : undefined);
+
+  /** A row of colours with None first, for an effect that can be off. */
+  function effectColours(name: string, current: string | undefined, apply: (paint: string | undefined) => void) {
+    const row = element("div", "ag-swatch-row");
+    const none = element("button", "ag-swatch-key ag-swatch-none");
+    none.type = "button";
+    none.setAttribute("aria-label", `${name}: ${labels.none}`);
+    none.title = labels.none;
+    none.setAttribute("aria-pressed", String(!current));
+    none.dataset.popKey = `${name}: ${labels.none}`;
+    none.addEventListener("click", () => apply(undefined));
+    row.append(none);
+    const chosen = current?.toLowerCase();
+    PALETTE.forEach((color, index) => {
+      const key = swatch(color, `${name}: ${labels.paletteNames[index] ?? color}`, chosen === color, () => apply(color));
+      key.dataset.popKey = key.getAttribute("aria-label")!;
+      row.append(key);
+    });
+    return [popName(name), row];
+  }
+
+  /** Effects on words: a shadow, capitals, an outline and a colour behind them. */
+  function effectsPop(anchor: HTMLElement, layer: Layer, focus?: string) {
+    const set = (change: Partial<Layer>) => {
+      const kept = popFocus();
+      update(find(layer.id)!, change);
+      effectsPop(toolbar.querySelector<HTMLElement>('[data-key="effects"]') ?? anchor, find(layer.id)!, kept);
+    };
+    const keys = element("div", "ag-pop-actions ag-pop-pair");
+    keys.append(
+      toggleKey(labels.shadow, ICONS.shadow, Boolean(layer.shadow), () => set({ shadow: !layer.shadow })),
+      toggleKey(labels.capitals, ICONS.capitals, Boolean(layer.uppercase), () => set({ uppercase: !layer.uppercase })),
+    );
+    openPop(anchor, labels.effects, [keys, ...effectColours(labels.outline, layer.outline, (paint) => set({ outline: paint })), ...effectColours(labels.behind, layer.background, (paint) => set({ background: paint }))], focus);
+  }
+
+  /** How a layer comes in, and the stretch of the clip it shows for. */
+  function animatePop(anchor: HTMLElement, layer: Layer, focus?: string) {
+    const set = (change: Partial<Layer>) => {
+      const kept = popFocus();
+      update(find(layer.id)!, change);
+      animatePop(toolbar.querySelector<HTMLElement>('[data-key="animate"]') ?? anchor, find(layer.id)!, kept);
+    };
+    const ways = element("div", "ag-pop-actions ag-pop-pair");
+    ways.append(toggleKey(labels.none, ICONS.remove, !layer.enter, () => set({ enter: undefined })));
+    for (const way of ENTRANCES) {
+      if (way === "typewriter" && !TYPEWRITER_KINDS.has(layer.kind)) continue;
+      ways.append(toggleKey(labels.enterNames[way], ICONS.animate, layer.enter === way, () => set({ enter: way })));
+    }
+    const times = element("div", "ag-position ag-times");
+    const timeField = (name: string, field: "from" | "until") => {
+      const label = element("label", "ag-field");
+      const text = element("span", "ag-field-name");
+      text.textContent = name;
+      const row = element("span", "ag-time-row");
+      // A plain text field: a phone's number pad has no colon for minutes and seconds.
+      const input = element("input", "ag-input");
+      input.type = "text";
+      input.placeholder = labels.wholeClip;
+      input.dataset.popKey = `${field}:time`;
+      const value = layer[field];
+      input.value = value === undefined ? "" : formatTime(value);
+      input.title = labels.timeHint;
+      // Each readable time takes effect as it is typed, so a click away keeps it; leaving the field ends the step.
+      input.addEventListener("input", () => {
+        const typed = input.value.trim();
+        const seconds = typed ? parseTime(typed) : undefined;
+        if (seconds !== undefined && !Number.isFinite(seconds)) return;
+        replaceLayer({ ...find(layer.id)!, [field]: seconds === undefined ? undefined : Math.max(0, seconds) }, false);
+      });
+      input.addEventListener("change", () => host.change(host.layers(), true));
+      const now = keyButton("", labels.playhead, ICONS.clock);
+      now.dataset.popKey = `${field}:now`;
+      now.addEventListener("click", () => set({ [field]: Math.max(0, Math.round(host.time() * 10) / 10) }));
+      row.append(input, now);
+      label.append(text, row);
+      return label;
+    };
+    times.append(timeField(labels.showFrom, "from"), timeField(labels.showUntil, "until"));
+    const whole = keyButton("", labels.wholeClip, ICONS.fit);
+    whole.dataset.popKey = "whole";
+    whole.addEventListener("click", () => set({ from: undefined, until: undefined }));
+    openPop(anchor, labels.animate, [popName(labels.animate), ways, popName(labels.timing), times, whole], focus);
+  }
+
+  function flipPop(anchor: HTMLElement, layer: Layer, focus?: string) {
+    const set = (change: Partial<Layer>) => {
+      const kept = popFocus();
+      update(find(layer.id)!, change);
+      flipPop(toolbar.querySelector<HTMLElement>('[data-key="flip"]') ?? anchor, find(layer.id)!, kept);
+    };
+    const keys = element("div", "ag-pop-actions");
+    keys.append(
+      toggleKey(labels.flipX, ICONS.flip, Boolean(layer.flipX), () => set({ flipX: !layer.flipX })),
+      toggleKey(labels.flipY, ICONS.flip, Boolean(layer.flipY), () => set({ flipY: !layer.flipY })),
+    );
+    openPop(anchor, labels.flip, [keys], focus);
+  }
+
+  /** Brightness, contrast and colour as percents of the picture's own, and a blur in pixels. */
+  function adjustPop(anchor: HTMLElement, layer: Layer) {
+    const tone = { brightness: 1, contrast: 1, saturation: 1, blur: 0, ...layer.adjust };
+    const set = (name: keyof typeof tone, value: number) => {
+      const current = find(layer.id)!;
+      replaceLayer({ ...current, adjust: { ...current.adjust, [name]: value } }, false);
+    };
+    const reset = keyButton("", labels.resetAdjust, ICONS.reset);
+    reset.addEventListener("click", () => {
+      update(find(layer.id)!, { adjust: undefined });
+      closePop();
+      focusKey("adjust");
+    });
+    openPop(anchor, labels.adjust, [
+      slider(labels.brightness, tone.brightness, (value) => set("brightness", value), { max: 200 }),
+      slider(labels.contrast, tone.contrast, (value) => set("contrast", value), { max: 200 }),
+      slider(labels.saturation, tone.saturation, (value) => set("saturation", value), { max: 200 }),
+      slider(labels.blur, tone.blur, (value) => set("blur", value), { max: 20, scale: 1, suffix: " px" }),
+      reset,
+    ]);
+  }
+
+  function stylePop(anchor: HTMLElement, layer: Layer) {
+    const keys = element("div", "ag-pop-actions");
+    for (const look of ["bars", "wave", "pulse"] as Visual[]) {
+      keys.append(toggleKey(labels.visualNames[look], ICONS[look], (layer.visual ?? "") === look, () => {
+        update(find(layer.id)!, { visual: look });
+        closePop();
+        focusKey("style");
+      }));
+    }
+    openPop(anchor, labels.style, [keys]);
   }
 
   /** A key on the bar with a swatch for its icon and its name beside it. */
@@ -783,6 +1060,21 @@ export function createStage(host: StageHost): Stage {
       node.dataset.key = key;
       return node;
     };
+    const popKey = (key: string, text: string, markup: string, open: (anchor: HTMLElement, layer: Layer) => void) => {
+      const button = keyed(keyButton("", text, markup), key);
+      button.setAttribute("aria-haspopup", "dialog");
+      button.setAttribute("aria-expanded", "false");
+      button.setAttribute("aria-controls", pop.id);
+      button.addEventListener("click", () => open(button, find(layer.id)!));
+      return button;
+    };
+    if (layer.locked) {
+      const unlock = keyed(keyButton("", labels.unlock, ICONS.unlock), "unlock");
+      unlock.addEventListener("click", () => lock(find(layer.id)!, false));
+      toolbar.append(unlock);
+      focusKey(active);
+      return;
+    }
     if (TEXT_KINDS.has(layer.kind)) {
       const font = host.fonts().find((item) => item.family === layer.font);
       const fontKey = keyed(keyButton("ag-font-key", font?.name ?? labels.defaultFont, ICONS.text), "font");
@@ -837,7 +1129,7 @@ export function createStage(host: StageHost): Stage {
       const alignKey = keyed(keyButton("", labels.align, ALIGN_ICONS[align]), "align");
       alignKey.setAttribute("aria-label", `${labels.align}: ${labels.alignNames[align]}`);
       alignKey.addEventListener("click", () => update(find(layer.id)!, { align: order[(order.indexOf(align) + 1) % order.length] }));
-      toolbar.append(alignKey);
+      toolbar.append(alignKey, popKey("effects", labels.effects, ICONS.effects, effectsPop));
       if (TYPED_KINDS.has(layer.kind)) {
         const edit = keyed(keyButton("", labels.editText, ICONS.text), "edit");
         edit.addEventListener("click", () => editText(layer.id));
@@ -846,18 +1138,24 @@ export function createStage(host: StageHost): Stage {
     } else if (layer.kind === "shape" || layer.kind === "visual") {
       const property = layer.kind === "shape" ? "fill" : "color";
       toolbar.append(colourKey("fill", labels.fill, paintOf(layer[property], theme, "accent"), (anchor) => colourPop(anchor, layer[property], "accent", (paint) => update(find(layer.id)!, { [property]: paint } as Partial<Layer>))));
+      if (layer.kind === "visual") toolbar.append(popKey("style", labels.style, ICONS[layer.visual ?? "bars"], stylePop));
     } else if (layer.kind === "image" || layer.kind === "avatar") {
       const swap = keyed(keyButton("", labels.replace, ICONS.photo), "replace");
       swap.addEventListener("click", () => host.replace(find(layer.id)!));
       toolbar.append(swap);
     }
+    if (PICTURE_KINDS.has(layer.kind)) {
+      const background = keyed(keyButton("", labels.setBackground, ICONS.background), "background");
+      background.addEventListener("click", () => setAsBackground(find(layer.id)!));
+      toolbar.append(popKey("flip", labels.flip, ICONS.flip, flipPop), popKey("adjust", labels.adjust, ICONS.adjust, adjustPop), background);
+    }
+    toolbar.append(popKey("animate", labels.animate, ICONS.animate, animatePop));
     const more = keyed(keyButton("ag-more-key", labels.more, ICONS.more), "more");
     more.setAttribute("aria-haspopup", "dialog");
     more.setAttribute("aria-expanded", "false");
     more.setAttribute("aria-controls", pop.id);
     more.addEventListener("click", () => morePop(more, find(layer.id)!));
-    const added = ADDED_KINDS.has(layer.kind);
-    const remove = keyed(keyButton("ag-remove-key", added ? labels.remove : labels.hide, added ? ICONS.trash : ICONS.hide), "remove");
+    const remove = keyed(keyButton("ag-remove-key", labels.remove, ICONS.trash), "remove");
     remove.addEventListener("click", () => removeLayer(find(layer.id)!));
     toolbar.append(more, remove);
     focusKey(active);
@@ -888,7 +1186,10 @@ export function createStage(host: StageHost): Stage {
       if (selectedId && (!layer || layer.hidden)) {
         selectedId = null;
         buildToolbar(null);
-      } else if (layer && !gesture && pop.hidden && JSON.stringify(layer) !== toolbarFor) buildToolbar(layer);
+      } else if (layer && !gesture && !changing && JSON.stringify(layer) !== toolbarFor) {
+        // Changed from elsewhere, as by undo: the bar, and any pop-over showing the layer as it was, are built again.
+        buildToolbar(layer);
+      }
       draw();
     },
     editText,

@@ -33,6 +33,7 @@
     "view.ts",
     "ui.ts",
     "layers.ts",
-    "stage.ts"
+    "stage.ts",
+    "templates.ts"
   ]
 }

@@ -253,6 +253,33 @@
 .ag-stage[data-layout="landscape"] .ag-preview { aspect-ratio: 16 / 9; }
 .ag-preview:focus-visible { box-shadow: 0 0 0 2px var(--ag-stage), 0 0 0 4px var(--ag-text); }
 .ag[data-tapping] .ag-preview { cursor: pointer; }
+/* Reading a recording in: a card low on the picture, the share done beside its name and as a bar under both. */
+.ag-import {
+  position: absolute;
+  left: 50%;
+  bottom: 20px;
+  z-index: 2;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  width: min(300px, calc(100% - 40px));
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--ag-bg);
+  box-shadow: 0 0 0 1px var(--ag-line), 0 16px 32px -16px rgb(0 0 0 / 0.4);
+  color: var(--ag-text);
+  font-size: 13px;
+  translate: -50% 0;
+  pointer-events: none;
+  transition: opacity 200ms ease-out, translate 200ms ease-out;
+}
+.ag-import[data-done] { opacity: 0; translate: -50% 6px; visibility: hidden; transition: opacity 240ms ease-in, translate 240ms ease-in, visibility 0s 240ms; }
+.ag-import-percent { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ag-import-bar { grid-column: 1 / -1; height: 4px; overflow: hidden; border-radius: 2px; background: var(--ag-line); }
+.ag-import-bar::after { content: ""; display: block; width: 100%; height: 100%; border-radius: inherit; background: var(--ag-accent); transform: scaleX(var(--progress, 0)); transform-origin: left; transition: transform 160ms linear; }
+@media (prefers-reduced-motion: reduce) {
+  .ag-import, .ag-import[data-done], .ag-import-bar::after { transition: none; }
+}
 .ag-tap-hint, .ag-notice {
   position: absolute;
   left: 20px;
@@ -358,10 +385,14 @@
 .ag-context .ag-key svg { width: 16px; height: 16px; }
 .ag-context .ag-btn { width: 32px; height: 32px; }
 .ag-font-key .ag-key-text { max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
-/* One row, always: anything that doesn't fit scrolls sideways inside the bar rather than covering the picture. */
-.ag-context { flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+/* One row, always: anything that doesn't fit scrolls sideways inside the bar rather than covering the picture. It
+   starts at its first key, so a long bar never cuts its start off, and a mouse gets a thin scrollbar to find the rest. */
+.ag-context { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
 .ag-context::-webkit-scrollbar { display: none; }
 .ag-context > * { flex: none; }
+@media (hover: hover) and (pointer: fine) {
+  .ag-context { scrollbar-width: thin; scrollbar-color: var(--ag-line) transparent; }
+}
 .ag-size { display: inline-flex; align-items: center; gap: 2px; }
 .ag-size-name { padding: 0 4px 0 6px; color: var(--ag-muted); font-size: 12px; }
 .ag-colour-key .ag-dot { width: 16px; height: 16px; }
@@ -378,6 +409,9 @@
 }
 /* The highlight swatch is square-ish, like a marked word. */
 .ag-highlight-key .ag-dot { border-radius: 4px; }
+.ag-swatch-key[aria-pressed="true"] { box-shadow: inset 0 0 0 1.5px var(--ag-accent); }
+/* No colour: a ring with a stroke through it. */
+.ag-swatch-none::before { content: ""; width: 18px; height: 18px; border-radius: 50%; box-shadow: inset 0 0 0 1.5px var(--ag-muted); background: linear-gradient(135deg, transparent 46%, var(--ag-muted) 46% 54%, transparent 54%); }
 
 .ag-pop {
   position: absolute;
@@ -397,6 +431,18 @@
 .ag-custom-colour input { width: 32px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; cursor: pointer; }
 .ag-pop-actions { display: grid; gap: 4px; }
 .ag-pop-actions .ag-key { justify-content: flex-start; height: 32px; font-size: 12.5px; }
+.ag-pop-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 240px; }
+.ag-edge-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; width: 240px; }
+.ag-edge-grid .ag-key { justify-content: flex-start; height: 32px; padding: 0 8px; font-size: 12.5px; }
+.ag-times { grid-template-columns: minmax(0, 1fr); }
+.ag-time-row { display: flex; gap: 6px; }
+.ag-time-row .ag-input { flex: 1; min-width: 0; height: 32px; font-variant-numeric: tabular-nums; }
+.ag-time-row .ag-key { height: 32px; font-size: 12.5px; }
+/* Locked: the ring stays, the handles go, and presses and swipes pass through it, so a locked background never stops
+   the page from scrolling on a phone. */
+.ag-select[data-locked] :is(.ag-grip, .ag-turn) { display: none; }
+.ag-select[data-locked] { pointer-events: none; }
+.ag-select[data-locked] { box-shadow: 0 0 0 1px rgb(0 0 0 / 0.55), 0 0 0 2.5px var(--ag-muted), 0 0 0 3.5px rgb(255 255 255 / 0.9); }
 .ag-font-search { height: 32px; }
 .ag-font-list { display: grid; gap: 1px; width: 240px; max-height: min(340px, 55vh); overflow-y: auto; overscroll-behavior: contain; }
 .ag-font-group { display: grid; gap: 1px; }
@@ -433,6 +479,22 @@
 .ag-upload-add:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
 .ag-upload-forget { position: absolute; top: 4px; right: 4px; width: 24px; height: 24px; background: rgb(0 0 0 / 0.55); color: #fff; }
 .ag-upload-forget svg { width: 13px; height: 13px; }
+.ag-upload-add video { width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+.ag-upload-video { position: relative; }
+.ag-upload-video svg { position: absolute; left: 5px; bottom: 5px; width: 18px; height: 18px; padding: 2px; border-radius: 4px; background: rgb(0 0 0 / 0.55); fill: none; stroke: #fff; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+
+/* The page's colour: the theme's, plain colours, gradients, then any colour. */
+.ag-page-swatches { display: grid; gap: 6px; }
+.ag-page-swatches .ag-swatch-row { grid-template-columns: repeat(auto-fill, 32px); }
+
+/* Stickers: emoji to drop on the page. */
+.ag-stickers { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+.ag-sticker { display: grid; place-items: center; aspect-ratio: 1; padding: 0; border: 0; border-radius: 8px; background: var(--ag-surface); font-size: 20px; line-height: 1; cursor: pointer; transition: transform 120ms ease, background-color 120ms ease; }
+@media (hover: hover) {
+  .ag-sticker:hover { background: var(--ag-bg); box-shadow: inset 0 0 0 1px var(--ag-line); }
+}
+.ag-sticker:active { transform: scale(0.94); }
+.ag-sticker:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
 
 /* Layers: top of the picture first, each a name to select and an eye to show or hide it. */
 .ag-layer-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
@@ -533,6 +595,9 @@
   opacity: 0.6;
 }
 .ag-handle:focus-visible { box-shadow: 0 0 0 2px var(--ag-bg), 0 0 0 4px var(--ag-text); }
+/* Each handle sits just inside its edge of the selection, so both stay whole and in reach at the ends of the recording. */
+.ag-handle-start { margin-left: 0; border-radius: 6px 3px 3px 6px; }
+.ag-handle-end { margin-left: -14px; border-radius: 3px 6px 6px 3px; }
 .ag-playhead {
   position: absolute;
   top: 4px;
@@ -617,7 +682,8 @@
   .ag-overlay { touch-action: pan-y pinch-zoom; }
   .ag-select { pointer-events: auto; touch-action: none; }
   .ag-input { font-size: 16px; }
-  .ag-handle { width: 20px; margin-left: -10px; }
+  .ag-handle { width: 20px; }
+  .ag-handle-end { margin-left: -20px; }
   .ag-scrub { height: 26px; }
   .ag-scrub::before { inset: 11px 0; }
   .ag-knob { width: 16px; height: 16px; translate: -50% 1px; }

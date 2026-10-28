@@ -1,11 +1,12 @@
 import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, spread, toSRT, type Cue } from "./captions.js";
 import { exportClip, type ExportResult } from "./export.js";
-import { clipTimeAt, joinParts, partsLength, stitchCues } from "./parts.js";
-import { Painter, SIZES, THEMES, type Layout, type Overlay, type Scene, type Theme, type Visual } from "./render.js";
+import { clipTimeAt, partsLength, readClip, stitchCues } from "./parts.js";
+import { TEMPLATES, templateOf, type TemplateId } from "./templates.js";
+import { Painter, SIZES, THEMES, type Layout, type Overlay, type Page, type Scene, type Theme, type Visual } from "./render.js";
 import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
 import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
 import { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
-import { defaultLayers, type Layer } from "./layers.js";
+import { defaultLayers, moveLayer, type Layer, type LayerKind } from "./layers.js";
 import { createStage, type FontChoice, type StageLabels } from "./stage.js";
 import { textHeight } from "./render.js";
 
@@ -23,6 +24,7 @@ export interface Labels {
   failed: string;
   openFailed: string;
   pictureFailed: string;
+  uploadFailed: string;
   musicFailed: string;
   timeline: string;
   overview: string;
@@ -82,14 +84,24 @@ export interface Labels {
   transcriptHelp: string;
   spread: string;
   loading: string;
+  /** Over the picture while a recording is read in, beside how far it has got. */
+  importing: string;
   empty: string;
   stage: StageLabels;
   undo: string;
   redo: string;
-  layoutName: string;
-  resetLayout: string;
+  templates: string;
+  templateNames: Record<TemplateId, string>;
+  pageColour: string;
+  pageNames: string[];
+  gradientNames: string[];
+  themePage: string;
   shapes: string;
-  shapeNames: { square: string; rounded: string; circle: string; line: string };
+  shapeNames: { square: string; rounded: string; circle: string; line: string; triangle: string; diamond: string; star: string; heart: string; arrow: string; bubble: string };
+  stickers: string;
+  addSticker: (sticker: string) => string;
+  soundAndCaptions: string;
+  elementNames: { captions: string; bars: string; wave: string; pulse: string; time: string; avatar: string; name: string; handle: string; title: string; links: string };
   addText: string;
   addHeading: string;
   addSubheading: string;
@@ -100,8 +112,9 @@ export interface Labels {
   addPicture: (name: string) => string;
   forgetPicture: string;
   pictureTooBig: string;
+  videoTooBig: string;
   layersHelp: string;
-  layerNames: Record<"avatar" | "name" | "handle" | "title" | "visual" | "time" | "captions" | "links" | "image" | "shape", string>;
+  layerNames: Record<"avatar" | "name" | "handle" | "title" | "visual" | "time" | "captions" | "links" | "image" | "video" | "shape", string>;
   textLayer: (words: string) => string;
   showLayer: (name: string) => string;
   hideLayer: (name: string) => string;
@@ -132,8 +145,12 @@ export interface EditorOptions {
   layout?: Layout;
   visual?: Visual;
   theme?: number | Theme;
-  /** The longest clip, in seconds. 140 by default: 2:20, the most X lets a free account post; Reels, Shorts, TikTok and LinkedIn all take it. */
+  /** The longest clip, in seconds; as long as the recording when left out. */
   maxLength?: number;
+  /** Start from an empty white page rather than the audiogram card; layouts given in `layers` still apply. */
+  blank?: boolean;
+  /** The page's own colour or gradient; the theme's when left out. */
+  page?: Page | null;
   font?: string;
   labels?: Partial<Labels>;
   /** Called with the finished video. Without it, the video downloads. */
@@ -148,7 +165,7 @@ export interface EditorOptions {
   onChange?: (settings: Settings) => void;
   /** The frame laid out as layers, for each shape that has been changed from the classic layout. */
   layers?: Partial<Record<Layout, Layer[]>>;
-  /** The pictures the user has uploaded, by key: the ones in the layers and the rest of their library. */
+  /** The pictures and videos the user has uploaded, by key: the ones in the layers and the rest of their library. */
   images?: Record<string, Blob | string>;
   /** Fonts to offer, each loaded only when used. */
   fonts?: FontChoice[];
@@ -176,6 +193,8 @@ export interface Settings {
   /** The layout of each shape the user changed, and their uploaded pictures by key. */
   layers: Partial<Record<Layout, Layer[]>>;
   images: Record<string, Blob | string>;
+  /** The page's own colour or gradient; null for the theme's. */
+  page: Page | null;
 }
 
 export interface Editor {
@@ -222,6 +241,7 @@ const DEFAULT_LABELS: Labels = {
   failed: "The video couldn't be made in this browser. Try Chrome, Edge or Safari.",
   openFailed: "This recording couldn't be opened. Save it as an MP3 or WAV and try again.",
   pictureFailed: "This picture couldn't be opened. Try a JPG, PNG or WebP.",
+  uploadFailed: "That file couldn't be opened. Try a JPG, PNG or WebP picture, or an MP4 or WebM video.",
   musicFailed: "This track couldn't be opened. Try an MP3 or WAV.",
   timeline: "The recording",
   overview: "The whole recording",
@@ -281,6 +301,7 @@ const DEFAULT_LABELS: Labels = {
   transcriptHelp: "Put one caption on each line. Each line gets as long as it takes to say, and together they replace the captions in the selected stretch.",
   spread: "Use as captions",
   loading: "Opening the recording",
+  importing: "Importing audio",
   empty: "Open a recording of a Space, a podcast or a voice note to start.",
   stage: {
     picture: "The picture. Tab to step through its parts, Enter to edit one, arrows to move it",
@@ -325,27 +346,70 @@ const DEFAULT_LABELS: Labels = {
     typing: (layer) => `Edit ${layer}`,
     selected: (layer) => `${layer} selected`,
     hidden: (layer) => `${layer} hidden. Show it again from Layers`,
-    deleted: (layer) => `${layer} deleted`,
+    deleted: (layer) => `${layer} deleted. Add it back from Elements, or undo`,
     duplicated: (layer) => `${layer} duplicated`,
+    effects: "Effects",
+    shadow: "Shadow",
+    outline: "Outline",
+    behind: "Colour behind",
+    capitals: "Capitals",
+    none: "None",
+    animate: "Animate",
+    enterNames: { fade: "Fade in", rise: "Rise", pop: "Pop", slide: "Slide in", typewriter: "Typewriter" },
+    timing: "Shown",
+    showFrom: "From",
+    showUntil: "Until",
+    playhead: "Playhead",
+    wholeClip: "Whole clip",
+    timeHint: "Minutes and seconds into the clip, such as 1:05. Leave it empty for the whole clip.",
+    flip: "Flip",
+    flipX: "Flip across",
+    flipY: "Flip upside down",
+    adjust: "Adjust",
+    brightness: "Brightness",
+    contrast: "Contrast",
+    saturation: "Colour",
+    blur: "Blur",
+    resetAdjust: "Reset",
+    setBackground: "Set as background",
+    lock: "Lock",
+    unlock: "Unlock",
+    locked: (layer) => `${layer} locked`,
+    alignPage: "Align to page",
+    edgeNames: { left: "Left", center: "Centre", right: "Right", top: "Top", middle: "Middle", bottom: "Bottom" },
+    copy: "Copy",
+    paste: "Paste",
+    copied: (layer) => `${layer} copied`,
+    style: "Style",
+    visualNames: { bars: "Bars", wave: "Wave", pulse: "Pulse" },
   },
   undo: "Undo",
   redo: "Redo",
-  layoutName: "Layout",
-  resetLayout: "Reset layout",
+  templates: "Start from",
+  templateNames: { blank: "Blank page", card: "Audiogram card", captions: "Big captions" },
+  pageColour: "Page colour",
+  pageNames: ["White", "Cream", "Black", "Sky", "Mint", "Rose", "Butter", "Lilac"],
+  gradientNames: ["Sunrise", "Lagoon", "Deep sea", "Lime", "Peach", "Dusk"],
+  themePage: "The theme's colours",
   shapes: "Shapes",
-  shapeNames: { square: "Square", rounded: "Rounded", circle: "Circle", line: "Line" },
+  shapeNames: { square: "Square", rounded: "Rounded", circle: "Circle", line: "Line", triangle: "Triangle", diamond: "Diamond", star: "Star", heart: "Heart", arrow: "Arrow", bubble: "Speech" },
+  stickers: "Stickers",
+  addSticker: (sticker) => `Add ${sticker}`,
+  soundAndCaptions: "Sound and captions",
+  elementNames: { captions: "Captions", bars: "Sound bars", wave: "Sound wave", pulse: "Pulse", time: "Clip time", avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", links: "Links" },
   addText: "Add text",
   addHeading: "Add a heading",
   addSubheading: "Add a subheading",
   addBody: "Add a little text",
   newText: { heading: "Your heading", subheading: "Your subheading", body: "Your text" },
-  uploads: "Your pictures",
-  upload: "Upload pictures",
+  uploads: "Your uploads",
+  upload: "Upload photos or videos",
   addPicture: (name) => `Add ${name} to the picture`,
   forgetPicture: "Remove from your pictures",
   pictureTooBig: "That picture is over 20 MB. Try a smaller one.",
+  videoTooBig: "That video is over 200 MB. Try a shorter one.",
   layersHelp: "Top of the picture first. Press a name to select it; hidden parts can be shown again here.",
-  layerNames: { avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", visual: "Animation", time: "Clip time", captions: "Captions", links: "Links", image: "Picture", shape: "Shape" },
+  layerNames: { avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", visual: "Animation", time: "Clip time", captions: "Captions", links: "Links", image: "Picture", video: "Video", shape: "Shape" },
   textLayer: (words) => `Text: ${words}`,
   showLayer: (name) => `Show ${name}`,
   hideLayer: (name) => `Hide ${name}`,
@@ -357,6 +421,20 @@ const TAB_ICONS: Record<Tab, string> = { design: ICONS.design, elements: ICONS.e
 // Uploaded pictures: the kinds every browser draws, up to a size a phone can hold several of.
 const PICTURE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"];
 const PICTURE_LIMIT = 20 * 1024 * 1024;
+// Videos the browser can play in a layer, muted; the clip's sound stays the recording's.
+const VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
+const VIDEO_LIMIT = 200 * 1024 * 1024;
+const isVideo = (source: Blob | string) => (typeof source === "string" ? /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(source) : source.type.startsWith("video/"));
+const PAGE_COLOURS = ["#ffffff", "#f4efe6", "#111111", "#dbeafe", "#dcfce7", "#ffe4e6", "#fef3c7", "#ede9fe"];
+const GRADIENTS: Page[] = [
+  { color: "#ff9a8b", to: "#ffd86f", angle: 135 },
+  { color: "#4facfe", to: "#00f2fe", angle: 135 },
+  { color: "#0f2027", to: "#2c5364", angle: 180 },
+  { color: "#a8ff78", to: "#78ffd6", angle: 135 },
+  { color: "#f6d365", to: "#fda085", angle: 160 },
+  { color: "#2b1055", to: "#7597de", angle: 180 },
+];
+const STICKERS = ["🔥", "⭐", "❤️", "😂", "🎉", "👏", "💡", "🚀", "✅", "❗", "❓", "💯", "🎙️", "🎧", "📈", "💰", "👀", "🙌", "😍", "🤯", "⚡", "📌", "👉", "🧠"];
 const LAYOUTS: Layout[] = ["square", "portrait", "story", "landscape"];
 const RATIOS: Record<Layout, string> = { square: "1:1", portrait: "4:5", story: "9:16", landscape: "16:9" };
 
@@ -382,6 +460,22 @@ function clock(seconds: number): string {
   return hours ? `${hours}:${String(minutes).padStart(2, "0")}:${secs}` : `${minutes}:${secs}`;
 }
 
+/** A video ready to draw: muted, looping, its first frame decoded. */
+async function loadVideo(source: string | Blob): Promise<HTMLVideoElement> {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.loop = true;
+  video.playsInline = true;
+  video.preload = "auto";
+  const loaded = new Promise<void>((resolve, reject) => {
+    video.onloadeddata = () => resolve();
+    video.onerror = () => reject(new Error("The video could not be opened"));
+  });
+  video.src = typeof source === "string" ? source : URL.createObjectURL(source);
+  await loaded;
+  return video;
+}
+
 async function loadImage(source: string | Blob): Promise<HTMLImageElement> {
   const image = new Image();
   image.decoding = "async";
@@ -397,7 +491,7 @@ async function loadImage(source: string | Blob): Promise<HTMLImageElement> {
 
 export function audiogram(container: HTMLElement, options: EditorOptions = {}): Editor {
   const labels: Labels = { ...DEFAULT_LABELS, ...options.labels };
-  const maxLength = options.maxLength ?? 140;
+  const maxLength = options.maxLength ?? Infinity;
   const id = `ag${++instances}`;
   let source: AudioSource | null = null;
   let sourceInput: string | Blob | null = null;
@@ -409,7 +503,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let view: View = [0, 1];
   let layout: Layout = options.layout ?? "square";
   let visual: Visual = options.visual ?? "bars";
-  let theme: Theme = typeof options.theme === "object" ? options.theme : THEMES[options.theme ?? 0] ?? THEMES[0];
+  // A blank page starts white, with the theme whose words read on white.
+  let theme: Theme = typeof options.theme === "object" ? options.theme : THEMES[options.theme ?? (options.blank ? 1 : 0)] ?? THEMES[0];
+  let page: Page | null = options.page !== undefined ? options.page : options.blank ? { color: "#ffffff" } : null;
+  // Whether the clip is playing, so layers come in at their times; while it is still, they show as they end up.
+  let animating = false;
   let title = options.title ?? "";
   let speaker = options.speaker ?? "";
   let handle = options.handle ?? "";
@@ -445,10 +543,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let exporting = false;
   let tab: Tab = "design";
   // The frame's layers for each shape the user has changed; the classic layout stands for the rest.
-  let designs: Partial<Record<Layout, Layer[]>> = Object.fromEntries(LAYOUTS.filter((name) => options.layers?.[name]).map((name) => [name, options.layers![name]!.map((layer) => ({ ...layer }))]));
+  let designs: Partial<Record<Layout, Layer[]>> = Object.fromEntries(LAYOUTS.filter((name) => options.layers?.[name] || options.blank).map((name) => [name, (options.layers?.[name] ?? []).map((layer) => ({ ...layer }))]));
   const layersFor = (shape: Layout) => designs[shape] ?? defaultLayers(shape);
   // Uploaded pictures by key, as given and as drawn; `listed` ones show in the Photos panel.
-  const pictures = new Map<string, { source: Blob | string; image: HTMLImageElement | null; url: string | null; listed: boolean }>();
+  const pictures = new Map<string, { source: Blob | string; image: HTMLImageElement | null; video: HTMLVideoElement | null; url: string | null; listed: boolean }>();
   let editingLayer: string | null = null;
   let fontList: FontChoice[] = options.fonts ?? [];
   const fontsAdded = new Set<string>();
@@ -529,7 +627,18 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   emptyNote.textContent = labels.empty;
   const notice = element("p", "ag-notice");
   notice.hidden = true;
-  stageArea.append(preview, tapHint, emptyNote, notice);
+  // How far a recording has been read in: the file, then its waveform, which is most of the wait on a long one.
+  const importCard = element("div", "ag-import");
+  importCard.setAttribute("role", "progressbar");
+  importCard.setAttribute("aria-label", labels.importing);
+  importCard.setAttribute("aria-valuemin", "0");
+  importCard.setAttribute("aria-valuemax", "100");
+  importCard.dataset.done = "";
+  const importName = element("span", "ag-import-name");
+  importName.textContent = labels.importing;
+  const importPercent = element("span", "ag-import-percent");
+  importCard.append(importName, importPercent, element("span", "ag-import-bar"));
+  stageArea.append(preview, tapHint, emptyNote, notice, importCard);
   body.append(rail, drawer, stageArea);
 
   const heading = (pane: HTMLElement, text: string) => {
@@ -599,26 +708,79 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   });
   tiles(panes.design, labels.visual, (["bars", "wave", "pulse"] as Visual[]).map((value) => ({ value, text: labels.visuals[value], markup: ICONS[value] })), visual, (value) => {
     visual = value as Visual;
+    // The animation picked here is every sound layer's, the ones added with a look of their own included.
+    designs = Object.fromEntries(Object.entries(designs).map(([shape, list]) => [shape, list!.map((layer) => (layer.kind === "visual" ? { ...layer, visual: undefined } : layer))])) as typeof designs;
     rebuild();
+    record();
     changed();
   });
   const themeTiles = tiles(panes.design, labels.colours, THEMES.map((item, index) => ({ value: String(index), text: item.name, swatch: item })), String(Math.max(0, THEMES.indexOf(theme))), (value) => {
     theme = THEMES[Number(value)];
+    // A theme colours the page as well as the words, so they always read on it; a page colour can be picked after.
+    page = null;
+    renderPageSwatches();
     rebuild();
+    record();
     changed();
   });
   themeTiles.classList.add("ag-swatches");
-  heading(panes.design, labels.layoutName);
-  const resetButton = keyButton("ag-reset", labels.resetLayout, ICONS.reset);
-  panes.design.append(resetButton);
+  heading(panes.design, labels.templates);
+  const templateTiles = element("div", "ag-tiles");
+  templateTiles.style.setProperty("--ag-count", "3");
+  const templateIcons: Record<TemplateId, string> = { blank: ICONS.page, card: ICONS.template, captions: ICONS.captions };
+  for (const { id } of TEMPLATES) {
+    const tile = element("button", "ag-tile");
+    tile.type = "button";
+    const text = element("span", "ag-tile-text");
+    text.textContent = labels.templateNames[id];
+    tile.append(icon(templateIcons[id]), text);
+    tile.addEventListener("click", () => applyTemplate(id));
+    templateTiles.append(tile);
+  }
+  panes.design.append(templateTiles);
+  heading(panes.design, labels.pageColour);
+  const pageSwatches = element("div", "ag-page-swatches");
+  panes.design.append(pageSwatches);
+
+  heading(panes.elements, labels.soundAndCaptions);
+  const soundTiles = element("div", "ag-tiles");
+  soundTiles.style.setProperty("--ag-count", "4");
+  const soundKinds: Array<{ name: string; markup: string; kind: LayerKind; look?: Visual }> = [
+    { name: labels.elementNames.captions, markup: ICONS.captions, kind: "captions" },
+    { name: labels.elementNames.bars, markup: ICONS.bars, kind: "visual", look: "bars" },
+    { name: labels.elementNames.wave, markup: ICONS.wave, kind: "visual", look: "wave" },
+    { name: labels.elementNames.pulse, markup: ICONS.pulse, kind: "visual", look: "pulse" },
+    { name: labels.elementNames.time, markup: ICONS.clock, kind: "time" },
+    { name: labels.elementNames.avatar, markup: ICONS.avatar, kind: "avatar" },
+    { name: labels.elementNames.name, markup: ICONS.name, kind: "name" },
+    { name: labels.elementNames.handle, markup: ICONS.handle, kind: "handle" },
+    { name: labels.elementNames.title, markup: ICONS.heading, kind: "title" },
+    { name: labels.elementNames.links, markup: ICONS.link, kind: "links" },
+  ];
+  for (const item of soundKinds) {
+    const tile = element("button", "ag-tile");
+    tile.type = "button";
+    const text = element("span", "ag-tile-text");
+    text.textContent = item.name;
+    tile.append(icon(item.markup), text);
+    tile.addEventListener("click", () => addElement(item.kind, item.look));
+    soundTiles.append(tile);
+  }
+  panes.elements.append(soundTiles);
 
   heading(panes.elements, labels.shapes);
   const shapeTiles = element("div", "ag-tiles");
-  shapeTiles.style.setProperty("--ag-count", "4");
+  shapeTiles.style.setProperty("--ag-count", "5");
   const shapeKinds = [
     { name: labels.shapeNames.square, markup: ICONS.shapeSquare, make: (): Partial<Layer> => ({ shape: "rect", radius: 0 }) },
     { name: labels.shapeNames.rounded, markup: ICONS.shapeRounded, make: (): Partial<Layer> => ({ shape: "rect", radius: 0.18 }) },
     { name: labels.shapeNames.circle, markup: ICONS.shapeCircle, make: (): Partial<Layer> => ({ shape: "ellipse" }) },
+    { name: labels.shapeNames.triangle, markup: ICONS.shapeTriangle, make: (): Partial<Layer> => ({ shape: "triangle" }) },
+    { name: labels.shapeNames.diamond, markup: ICONS.shapeDiamond, make: (): Partial<Layer> => ({ shape: "diamond" }) },
+    { name: labels.shapeNames.star, markup: ICONS.shapeStar, make: (): Partial<Layer> => ({ shape: "star" }) },
+    { name: labels.shapeNames.heart, markup: ICONS.shapeHeart, make: (): Partial<Layer> => ({ shape: "heart" }) },
+    { name: labels.shapeNames.arrow, markup: ICONS.shapeArrow, make: (): Partial<Layer> => ({ shape: "arrow", wide: true } as Partial<Layer>) },
+    { name: labels.shapeNames.bubble, markup: ICONS.shapeBubble, make: (): Partial<Layer> => ({ shape: "bubble", wide: true } as Partial<Layer>) },
     { name: labels.shapeNames.line, markup: ICONS.shapeLine, make: (): Partial<Layer> => ({ shape: "rect", radius: 0.5, line: true } as Partial<Layer>) },
   ];
   for (const kind of shapeKinds) {
@@ -631,6 +793,18 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     shapeTiles.append(tile);
   }
   panes.elements.append(shapeTiles);
+
+  heading(panes.elements, labels.stickers);
+  const stickerGrid = element("div", "ag-stickers");
+  for (const sticker of STICKERS) {
+    const button = element("button", "ag-sticker");
+    button.type = "button";
+    button.textContent = sticker;
+    button.setAttribute("aria-label", labels.addSticker(sticker));
+    button.addEventListener("click", () => addSticker(sticker));
+    stickerGrid.append(button);
+  }
+  panes.elements.append(stickerGrid);
   for (const [index, button] of [...themeTiles.children].entries()) button.setAttribute("aria-label", labels.theme(THEMES[index].name));
 
   // Text: what the frame says, and up to three links.
@@ -751,7 +925,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const uploadButton = keyButton("ag-upload", labels.upload, ICONS.upload);
   const uploadInput = element("input", "ag-hidden");
   uploadInput.type = "file";
-  uploadInput.accept = PICTURE_TYPES.join(",");
+  uploadInput.accept = [...PICTURE_TYPES, ...VIDEO_TYPES].join(",");
   uploadInput.multiple = true;
   uploadInput.tabIndex = -1;
   const uploadGrid = element("div", "ag-uploads");
@@ -878,8 +1052,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const wave = element("canvas", "ag-wave");
   wave.setAttribute("aria-hidden", "true");
   const selection = element("div", "ag-selection");
-  const startHandle = element("div", "ag-handle");
-  const endHandle = element("div", "ag-handle");
+  const startHandle = element("div", "ag-handle ag-handle-start");
+  const endHandle = element("div", "ag-handle ag-handle-end");
   for (const [handleNode, name] of [[startHandle, labels.clipStart], [endHandle, labels.clipEnd]] as const) {
     handleNode.setAttribute("role", "slider");
     handleNode.setAttribute("aria-label", name);
@@ -932,11 +1106,26 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   // The picture.
 
-  let clipAudio: { key: string; samples: Float32Array } | null = null;
-  let clipPending: { key: string; promise: Promise<Float32Array> } | null = null;
+  // The picture's sound is a window of the clip around the playhead, never the whole of it, so a clip can run for hours.
+  let clipWindow: { key: string; from: number; to: number; samples: Float32Array } | null = null;
+  let windowPending: { key: string; from: number } | null = null;
   const clipKey = () => `${generation}|${spans().map(([start, end]) => `${start.toFixed(3)}-${end.toFixed(3)}`).join(",")}`;
 
-  const scene = (samples?: Float32Array): Scene => ({
+  /** The clip's sound from `from` to `to` seconds into it, read from the recording's parts as they stand now. */
+  function clipReader(): (from: number, to: number) => Promise<Float32Array> {
+    const recording = source;
+    const list = spans().map(([start, end]) => [start, end] as const);
+    if (!recording) return async (from, to) => new Float32Array(Math.max(0, Math.round((to - from) * SAMPLE_RATE)));
+    return (from, to) => readClip((start, end, rate) => recording.read(start, end, rate), list, from, to, SAMPLE_RATE);
+  }
+
+  const sceneAudio = (): Scene["audio"] => {
+    const shown = clipWindow?.key === clipKey() ? clipWindow : null;
+    const from = shown?.from ?? 0;
+    return { samples: shown?.samples ?? SILENCE, sampleRate: SAMPLE_RATE, start: -from, end: Math.max(0, clipLength()) - from, read: clipReader() };
+  };
+
+  const scene = (): Scene => ({
     layout,
     visual,
     theme,
@@ -950,10 +1139,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     logo,
     links,
     layers: layersFor(layout).map((layer) => (layer.id === editingLayer ? { ...layer, hidden: true } : layer)),
-    images: new Map([...pictures].filter(([, picture]) => picture.image).map(([key, picture]) => [key, picture.image!])),
+    images: new Map([...pictures].flatMap(([key, picture]): Array<[string, CanvasImageSource]> => (picture.image ? [[key, picture.image]] : picture.video ? [[key, picture.video]] : []))),
+    page,
     music: music ? { samples: music.samples, gain: musicVolume } : null,
     captions: paginate(parts.length ? stitchCues(cues, parts) : clip(cues, range[0], range[1]), pageLength(layout)),
-    audio: { samples: samples ?? (clipAudio?.key === clipKey() ? clipAudio.samples : SILENCE), sampleRate: SAMPLE_RATE, start: 0, end: Math.max(0, clipLength()) },
+    audio: sceneAudio(),
   });
 
   let painter = new Painter(scene());
@@ -987,6 +1177,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     frameSize: () => SIZES[layout],
     layerName,
     announce,
+    time: () => clipTime(),
     open(layer) {
       if (layer.kind === "links") {
         selectTab("text");
@@ -1021,6 +1212,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   function paint() {
     const time = clipTime();
+    // Moving along the same clip reads the sound ahead; a changed clip waits for its edits to settle (scheduleClip).
+    if (clipWindow?.key === clipKey()) loadWindow(time);
     painter.paint(ctx, time);
     const index = cueAt(painter.scene.captions, time);
     preview.setAttribute("aria-label", [title, speaker, index >= 0 ? painter.scene.captions[index].text : ""].filter(Boolean).join(". "));
@@ -1041,6 +1234,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     theme: THEMES.includes(theme) ? THEMES.indexOf(theme) : theme,
     layers: Object.fromEntries(Object.entries(designs).map(([name, list]) => [name, list!.map((layer) => ({ ...layer }))])),
     images: Object.fromEntries([...pictures].filter(([key, picture]) => picture.listed || usedPicture(key)).map(([key, picture]) => [key, picture.source])),
+    page,
   });
 
   // The page hears about a change to the look once a frame, however many inputs moved in it.
@@ -1056,7 +1250,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   /** Something the picture shows has changed: draw it again from scratch. */
   function rebuild() {
+    placeCaptions();
     painter = new Painter(scene());
+    painter.animate = animating;
     sizePreview();
     paint();
     renderCues();
@@ -1083,7 +1279,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // Each change ended by the user is a step to undo: the layers of every shape and the frame's own words.
   const history: string[] = [];
   let historyAt = -1;
-  const snapshot = () => JSON.stringify({ designs, title, speaker, handle });
+  const snapshot = () => JSON.stringify({ designs, title, speaker, handle, page, theme: THEMES.includes(theme) ? THEMES.indexOf(theme) : theme });
   function record() {
     const now = snapshot();
     if (history[historyAt] === now) return;
@@ -1097,6 +1293,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   /** A layer's name for people. */
   function layerName(layer: Layer): string {
     if (layer.kind === "text") return labels.textLayer((layer.text ?? "").split(/\s+/).slice(0, 4).join(" ") || "…");
+    if (layer.kind === "visual") return labels.elementNames[layer.visual ?? visual];
     return labels.layerNames[layer.kind];
   }
 
@@ -1138,8 +1335,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const to = historyAt + step;
     if (to < 0 || to >= history.length) return;
     historyAt = to;
-    const state = JSON.parse(history[to]) as { designs: typeof designs; title: string; speaker: string; handle: string };
-    ({ designs, title, speaker, handle } = state);
+    const state = JSON.parse(history[to]) as { designs: typeof designs; title: string; speaker: string; handle: string; page: Page | null; theme: number | Theme };
+    ({ designs, title, speaker, handle, page } = state);
+    theme = typeof state.theme === "number" ? THEMES[state.theme] ?? theme : state.theme;
+    markTheme();
+    renderPageSwatches();
     titleField.querySelector("input")!.value = title;
     speakerField.querySelector("input")!.value = speaker;
     handleField.querySelector("input")!.value = handle;
@@ -1172,40 +1372,201 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     stage.editText(id);
   }
 
-  function addShape(shape: Partial<Layer> & { line?: boolean }) {
+  function addShape(shape: Partial<Layer> & { line?: boolean; wide?: boolean }) {
     const { width, height } = SIZES[layout];
     const side = 0.3 * Math.min(width, height);
-    const { line, ...style } = shape;
-    const w = (line ? side * 1.6 : side) / width;
+    const { line, wide, ...style } = shape;
+    const w = (line ? side * 1.6 : wide ? side * 1.4 : side) / width;
     const h = (line ? Math.max(6, side * 0.03) : side) / height;
     addLayer({ id: layerId("shape"), kind: "shape", x: 0.5 - w / 2, y: 0.5 - h / 2, w, h, rotation: 0, opacity: 1, fill: "accent", ...style });
   }
 
+  /** An emoji as a big text layer in the middle of the page. */
+  function addSticker(sticker: string) {
+    const { width, height } = SIZES[layout];
+    const side = 0.22 * Math.min(width, height);
+    addLayer({ id: layerId("text"), kind: "text", text: sticker, x: 0.5 - side / width / 2, y: 0.5 - side / height / 2, w: side / width, h: side / height, rotation: 0, opacity: 1, size: 180, align: "center" });
+  }
+
+  /** One of the clip's own parts, where the classic card has it, or a little off it when one is there already. */
+  function addElement(kind: LayerKind, look?: Visual) {
+    const classic = defaultLayers(layout).find((layer) => layer.kind === kind);
+    if (!classic) return;
+    const taken = layersFor(layout).some((layer) => layer.kind === kind && Math.abs(layer.x - classic.x) < 0.01 && Math.abs(layer.y - classic.y) < 0.01);
+    addLayer({ ...(taken ? moveLayer(classic, 0.03, 0.03) : classic), id: layerId(kind), ...(look ? { visual: look } : {}) });
+  }
+
+  // Captions arriving on a page with no place for them get one, once; after that where they go is the user's call.
+  let captionsPlaced = false;
+  let built = false;
+  function placeCaptions() {
+    if (!built || captionsPlaced || !cues.length) return;
+    captionsPlaced = true;
+    let added = false;
+    for (const shape of LAYOUTS) {
+      const list = layersFor(shape);
+      if (list.some((layer) => layer.kind === "captions")) continue;
+      designs = { ...designs, [shape]: [...list, { ...defaultLayers(shape).find((layer) => layer.kind === "captions")!, id: layerId("captions") }] };
+      added = true;
+    }
+    if (added) {
+      record();
+      changed();
+    }
+  }
+
+  function applyTemplate(id: TemplateId) {
+    const chosen = templateOf(id, layout);
+    page = chosen.page;
+    if (chosen.theme !== undefined) theme = THEMES[chosen.theme];
+    markTheme();
+    renderPageSwatches();
+    stage.select(null);
+    setLayers(chosen.layers, true);
+  }
+
+  function markTheme() {
+    const index = String(THEMES.indexOf(theme));
+    for (const button of themeTiles.querySelectorAll<HTMLButtonElement>("[data-value]")) {
+      const on = button.dataset.value === index;
+      button.setAttribute("aria-checked", String(on));
+      button.tabIndex = on ? 0 : -1;
+    }
+  }
+
+  function setPage(next: Page | null) {
+    page = next;
+    rebuild();
+    record();
+    changed();
+    renderPageSwatches();
+  }
+
+  /** The page's colours: the theme's own, plain colours, gradients and any colour at all. */
+  function renderPageSwatches() {
+    // The swatch pressed is drawn again; focus goes back to its new self.
+    const focused = pageSwatches.contains(document.activeElement) ? (document.activeElement as HTMLElement).getAttribute("aria-label") : null;
+    const same = (a: Page | null, b: Page | null) => JSON.stringify(a) === JSON.stringify(b);
+    const key = (name: string, fill: string, value: Page | null) => {
+      const button = element("button", "ag-swatch-key");
+      button.type = "button";
+      button.setAttribute("aria-label", name);
+      button.title = name;
+      button.setAttribute("aria-pressed", String(same(page, value)));
+      const dot = element("span", "ag-dot");
+      dot.style.background = fill;
+      button.append(dot);
+      button.addEventListener("click", () => setPage(value));
+      return button;
+    };
+    const custom = element("label", "ag-custom-colour");
+    const input = element("input", "");
+    input.type = "color";
+    input.value = page && /^#[0-9a-f]{6}$/i.test(page.color) && !page.to ? page.color : "#ffffff";
+    input.addEventListener("change", () => setPage({ color: input.value }));
+    const name = element("span", "");
+    name.textContent = labels.stage.custom;
+    custom.append(input, name);
+    const plain = element("div", "ag-swatch-row");
+    plain.append(key(labels.themePage, `linear-gradient(135deg, ${theme.background} 50%, ${theme.shade} 50%)`, null), ...PAGE_COLOURS.map((color, index) => key(labels.pageNames[index] ?? color, color, { color })));
+    const blends = element("div", "ag-swatch-row");
+    blends.append(...GRADIENTS.map((gradient, index) => key(labels.gradientNames[index] ?? "", `linear-gradient(${gradient.angle}deg, ${gradient.color}, ${gradient.to})`, gradient)));
+    pageSwatches.replaceChildren(plain, blends, custom);
+    if (focused) [...pageSwatches.querySelectorAll<HTMLElement>("[aria-label]")].find((node) => node.getAttribute("aria-label") === focused)?.focus();
+  }
+
+  /** A picture or a video from the uploads, half the page's size, in the middle. */
   function addPicture(key: string) {
     const picture = pictures.get(key);
-    if (!picture?.image) return;
+    const media = picture?.image ?? picture?.video;
+    if (!media) return;
+    const natural = media instanceof HTMLVideoElement ? { width: media.videoWidth, height: media.videoHeight } : { width: media.naturalWidth, height: media.naturalHeight };
+    if (!natural.width || !natural.height) return;
     const { width, height } = SIZES[layout];
-    const scale = Math.min((width * 0.5) / picture.image.naturalWidth, (height * 0.5) / picture.image.naturalHeight);
-    const w = (picture.image.naturalWidth * scale) / width;
-    const h = (picture.image.naturalHeight * scale) / height;
-    addLayer({ id: layerId("image"), kind: "image", image: key, x: 0.5 - w / 2, y: 0.5 - h / 2, w, h, rotation: 0, opacity: 1 });
+    const scale = Math.min((width * 0.5) / natural.width, (height * 0.5) / natural.height);
+    const w = (natural.width * scale) / width;
+    const h = (natural.height * scale) / height;
+    const kind = picture?.video ? "video" : "image";
+    addLayer({ id: layerId(kind), kind, image: key, x: 0.5 - w / 2, y: 0.5 - h / 2, w, h, rotation: 0, opacity: 1 });
+    if (kind === "video") syncVideos(clipTime(), !audio.paused);
   }
 
   async function keepPicture(source: Blob | string, key: string, listed: boolean) {
+    if (isVideo(source)) {
+      const video = await loadVideo(source);
+      // A still picture shows the video's frame at the playhead once it has been found.
+      video.addEventListener("seeked", () => {
+        if (audio.paused && !exporting) paint();
+      });
+      pictures.set(key, { source, image: null, video, url: video.src.startsWith("blob:") ? video.src : null, listed });
+      return;
+    }
     const image = await loadImage(source);
-    pictures.set(key, { source, image, url: image.src.startsWith("blob:") ? image.src : null, listed });
+    pictures.set(key, { source, image, video: null, url: image.src.startsWith("blob:") ? image.src : null, listed });
+  }
+
+  /** The videos on the page now, each once. */
+  function videosShown(): HTMLVideoElement[] {
+    const keys = new Set(layersFor(layout).filter((layer) => layer.kind === "video" && !layer.hidden).map((layer) => layer.image ?? ""));
+    return [...keys].map((key) => pictures.get(key)?.video).filter((video): video is HTMLVideoElement => Boolean(video));
+  }
+
+  /** Videos follow the clip, looping: playing along while it plays, held on the frame at the playhead while it doesn't. */
+  function syncVideos(time: number, playing: boolean) {
+    const shown = videosShown();
+    // Videos taken off the page, or left playing by an export, rest.
+    for (const picture of pictures.values()) if (picture.video && !shown.includes(picture.video) && !picture.video.paused) picture.video.pause();
+    for (const video of shown) {
+      const at = video.duration ? time % video.duration : 0;
+      if (playing) {
+        if (video.paused) {
+          video.currentTime = at;
+          void video.play().catch(() => {});
+        } else if (Math.abs(video.currentTime - at) > 0.3) video.currentTime = at;
+      } else {
+        if (!video.paused) video.pause();
+        if (Math.abs(video.currentTime - at) > 0.02) video.currentTime = at;
+      }
+    }
+  }
+
+  /** Each video put on the frame at `time` before it is painted, for the export. */
+  async function videosAt(time: number, live: boolean) {
+    if (live) return syncVideos(time, true);
+    await Promise.all(videosShown().map((video) => {
+      if (!video.paused) video.pause();
+      const at = video.duration ? time % video.duration : 0;
+      if (Math.abs(video.currentTime - at) < 1e-3) return undefined;
+      return new Promise<void>((resolve) => {
+        const done = () => resolve();
+        video.addEventListener("seeked", done, { once: true });
+        // A frame that never arrives shouldn't stall the export.
+        setTimeout(done, 1500);
+        video.currentTime = at;
+      });
+    }));
   }
 
   function renderUploads() {
-    uploadGrid.replaceChildren(...[...pictures].filter(([, picture]) => picture.listed && picture.image).map(([key, picture]) => {
+    uploadGrid.replaceChildren(...[...pictures].filter(([, picture]) => picture.listed && (picture.image || picture.video)).map(([key, picture]) => {
       const item = element("div", "ag-upload-item");
       const add = element("button", "ag-upload-add");
       add.type = "button";
       add.setAttribute("aria-label", labels.addPicture(picture.source instanceof File ? picture.source.name : key));
-      const thumb = element("img", "");
-      thumb.alt = "";
-      thumb.src = picture.image!.src;
-      add.append(thumb);
+      if (picture.video) {
+        const thumb = element("video", "");
+        thumb.muted = true;
+        thumb.playsInline = true;
+        thumb.preload = "metadata";
+        thumb.src = picture.video.src;
+        add.append(thumb, icon(ICONS.video));
+        add.classList.add("ag-upload-video");
+      } else {
+        const thumb = element("img", "");
+        thumb.alt = "";
+        thumb.src = picture.image!.src;
+        add.append(thumb);
+      }
       add.addEventListener("click", () => addPicture(key));
       const forget = iconButton("ag-upload-forget", labels.forgetPicture, ICONS.remove);
       forget.addEventListener("click", () => {
@@ -1235,31 +1596,39 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     await Promise.all([...used].map(([name, sample]) => loadFont(name, sample)));
   }
 
-  // The clip's own sound, read from the recording at 48 kHz once its stretches settle, for the picture and the export.
-  function loadClip(): Promise<Float32Array> {
+  // A minute of the clip's sound at 48 kHz around the playhead: ten seconds behind it for the wave, the rest ahead.
+  const WINDOW_BEHIND = 10;
+  const WINDOW_AHEAD = 50;
+
+  /** Reads the window of sound around `time` seconds into the clip, unless the one at hand still has room around it. */
+  function loadWindow(time: number) {
+    if (!source) return;
     const key = clipKey();
-    if (clipAudio?.key === key) return Promise.resolve(clipAudio.samples);
-    if (clipPending?.key === key) return clipPending.promise;
-    if (!source) return Promise.resolve(SILENCE);
-    const from = source;
-    const promise = Promise.all(spans().map(([start, end]) => from.read(start, end, SAMPLE_RATE))).then((pieces) => {
-      const samples = pieces.length > 1 ? joinParts(pieces, SAMPLE_RATE) : pieces[0];
-      if (key === clipKey()) {
-        clipAudio = { key, samples };
-        rebuild();
-      }
-      return samples;
+    const length = clipLength();
+    const shown = clipWindow?.key === key ? clipWindow : null;
+    // Five seconds behind for the wave; fifteen ahead, so the next window is read while this one still plays.
+    const roomBehind = !shown || shown.from <= 0 || time - 5 >= shown.from;
+    const roomAhead = !shown || shown.to >= length || time + 15 <= shown.to;
+    if (shown && roomBehind && roomAhead) return;
+    if (windowPending?.key === key && Math.abs(windowPending.from - Math.max(0, time - WINDOW_BEHIND)) < 20) return;
+    const from = Math.max(0, time - WINDOW_BEHIND);
+    const to = from + WINDOW_BEHIND + WINDOW_AHEAD;
+    windowPending = { key, from };
+    clipReader()(from, to).then((samples) => {
+      if (windowPending?.key === key && windowPending.from === from) windowPending = null;
+      if (key !== clipKey()) return;
+      clipWindow = { key, from, to, samples };
+      // The painter keeps its meter: swapping the sound under it mid-play shouldn't make the bars jump.
+      painter.scene = { ...painter.scene, audio: sceneAudio() };
+      if (audio.paused) paint();
+    }, () => {
+      if (windowPending?.key === key && windowPending.from === from) windowPending = null;
     });
-    clipPending = { key, promise };
-    void promise.catch(() => {}).finally(() => {
-      if (clipPending?.key === key) clipPending = null;
-    });
-    return promise;
   }
   let clipTimer = 0;
   function scheduleClip() {
     clearTimeout(clipTimer);
-    if (source) clipTimer = window.setTimeout(() => void loadClip().catch(() => {}), 150);
+    if (source) clipTimer = window.setTimeout(() => loadWindow(clipTime()), 150);
   }
 
   // The recording along the bottom.
@@ -1408,6 +1777,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         stop();
         playhead = list[0][0];
         painter.reset();
+        syncVideos(clipTime(), false);
         paint();
         placeTimeline();
         return;
@@ -1434,10 +1804,13 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       playing = 0;
       playhead = list[0][0];
     }
-    void loadClip().catch(() => {});
+    loadWindow(clipTime());
     audio.currentTime = playhead;
     painter.reset();
     void audio.play();
+    animating = true;
+    painter.animate = true;
+    syncVideos(clipTime(), true);
     if (music) {
       musicAudio.currentTime = clipTime() % music.duration;
       musicAudio.volume = musicVolume;
@@ -1453,6 +1826,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     audio.pause();
     musicAudio.pause();
     cancelAnimationFrame(frame);
+    if (animating) {
+      animating = false;
+      painter.animate = false;
+      syncVideos(clipTime(), false);
+      paint();
+    }
     playButton.replaceChildren(icon(ICONS.play));
     playButton.setAttribute("aria-label", labels.play);
     playButton.title = labels.play;
@@ -1466,6 +1845,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       if (music) musicAudio.currentTime = clipTime() % music.duration;
     }
     painter.reset();
+    syncVideos(clipTime(), !audio.paused);
     paint();
     placeTimeline();
     renderCues();
@@ -1591,6 +1971,18 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     }, 150);
   }
 
+  let importShown = -1;
+  function importProgress(fraction: number) {
+    const percent = Math.min(100, Math.floor(fraction * 100));
+    if (percent === importShown) return;
+    importShown = percent;
+    importPercent.textContent = `${percent}%`;
+    importCard.style.setProperty("--progress", String(Math.min(1, fraction)));
+    importCard.setAttribute("aria-valuenow", String(percent));
+    if (percent >= 100) importCard.dataset.done = "";
+    else delete importCard.dataset.done;
+  }
+
   let opening = 0;
   async function load(from: string | Blob) {
     if (exporting) return;
@@ -1598,11 +1990,13 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     stop();
     root.dataset.state = "loading";
     announce(labels.loading);
+    importProgress(0);
     let next: AudioSource;
     try {
-      next = await openSource(from, { onOutline: outlineChanged });
+      next = await openSource(from, { onOutline: outlineChanged, onProgress: (fraction) => mine === opening && importProgress(fraction) });
     } catch (error) {
       if (mine !== opening) return;
+      importProgress(1);
       root.dataset.state = source ? "ready" : "empty";
       tell(labels.openFailed);
       throw error;
@@ -1613,7 +2007,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     source = next;
     sourceInput = from;
     generation++;
-    clipAudio = null;
+    clipWindow = null;
+    windowPending = null;
     if (parts.length) {
       parts = [];
       renderParts();
@@ -1624,7 +2019,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     live.textContent = "";
     const keep = firstLoad && range[1] > range[0] && range[1] <= next.duration;
     firstLoad = false;
-    const [start, end] = keep ? range : [0, Math.min(next.duration, 30)];
+    // The whole recording, to play from end to end and trim from either side; a clip can be as long as it is.
+    const [start, end] = keep ? range : [0, maxLength < next.duration ? maxLength : next.duration];
     view = initialView(next.duration, [start, end]);
     playhead = start;
     setRange(start, end);
@@ -1641,9 +2037,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     stage.refresh();
     try {
       await loadUsedFonts();
-      const frozen = scene();
-      const samples = await loadClip();
-      const result = await exportClip({ ...frozen, audio: { ...frozen.audio, samples } }, {
+      const result = await exportClip(scene(), {
+        prepare: videosAt,
         onProgress: (fraction) => {
           const percent = Math.round(fraction * 100);
           meter.style.setProperty("--progress", String(fraction));
@@ -1666,6 +2061,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       throw error;
     } finally {
       exporting = false;
+      // The export left the videos on its last frame, or playing; they go back to the playhead.
+      syncVideos(clipTime(), false);
       root.dataset.state = "ready";
       exportButton.removeAttribute("aria-disabled");
       stage.refresh();
@@ -1939,11 +2336,6 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   undoButton.addEventListener("click", () => travel(-1));
   redoButton.addEventListener("click", () => travel(1));
-  resetButton.addEventListener("click", () => {
-    // The classic layout back for this shape, keeping what the user added on top.
-    setLayers([...defaultLayers(layout), ...layersFor(layout).filter((layer) => layer.kind === "text" || layer.kind === "image" || layer.kind === "shape")], true);
-    stage.select(null);
-  });
   replaceInput.addEventListener("change", async () => {
     const file = replaceInput.files?.[0];
     replaceInput.value = "";
@@ -1965,22 +2357,23 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const files = [...(uploadInput.files ?? [])];
     uploadInput.value = "";
     for (const file of files) {
-      if (!PICTURE_TYPES.includes(file.type)) {
-        tell(labels.pictureFailed);
+      const video = VIDEO_TYPES.includes(file.type);
+      if (!video && !PICTURE_TYPES.includes(file.type)) {
+        tell(labels.uploadFailed);
         continue;
       }
-      if (file.size > PICTURE_LIMIT) {
-        tell(labels.pictureTooBig);
+      if (file.size > (video ? VIDEO_LIMIT : PICTURE_LIMIT)) {
+        tell(video ? labels.videoTooBig : labels.pictureTooBig);
         continue;
       }
       const key = layerId("picture");
       try {
         await keepPicture(file, key, true);
       } catch {
-        tell(labels.pictureFailed);
+        tell(video ? labels.uploadFailed : labels.pictureFailed);
         continue;
       }
-      // One picture goes straight onto the frame; several wait in the panel to be placed.
+      // One upload goes straight onto the frame; several wait in the panel to be placed.
       if (files.length === 1) addPicture(key);
     }
     renderUploads();
@@ -2067,6 +2460,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     rebuild();
   }).catch(() => {});
   void loadUsedFonts().then(() => rebuild());
+  renderPageSwatches();
+  built = true;
+  placeCaptions();
   record();
   if (options.logo) void loadImage(options.logo).then((image) => {
     logo = image;
@@ -2148,7 +2544,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       source?.close();
       source = null;
       music?.close();
-      for (const picture of pictures.values()) if (picture.url) URL.revokeObjectURL(picture.url);
+      for (const picture of pictures.values()) {
+        picture.video?.pause();
+        if (picture.url) URL.revokeObjectURL(picture.url);
+      }
       root.remove();
     },
   };

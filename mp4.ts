@@ -34,6 +34,18 @@ export interface AudioTrack {
 
 export type Track = VideoTrack | AudioTrack;
 
+/** A track as the index needs it before its samples: what it is and how to decode it. */
+export type TrackHead = Omit<VideoTrack, "samples"> | Omit<AudioTrack, "samples">;
+
+/** What the index keeps of a sample: its size, how long it lasts, and whether a player can start at it. */
+interface SampleInfo {
+  size: number;
+  duration: number;
+  key: boolean;
+}
+
+type Indexed = TrackHead & { samples: SampleInfo[] };
+
 const MOVIE_TIMESCALE = 1000;
 const MATRIX = [0x00010000, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000];
 
@@ -115,11 +127,11 @@ class Writer {
   }
 }
 
-const trackDuration = (track: Track) => track.samples.reduce((sum, sample) => sum + sample.duration, 0);
-const movieDuration = (track: Track) => Math.round((trackDuration(track) / track.timescale) * MOVIE_TIMESCALE);
+const trackDuration = (track: Indexed) => track.samples.reduce((sum, sample) => sum + sample.duration, 0);
+const movieDuration = (track: Indexed) => Math.round((trackDuration(track) / track.timescale) * MOVIE_TIMESCALE);
 
 /** Durations as (count, delta) runs, the way the stts box stores them. */
-function runs(samples: Sample[]): Array<[number, number]> {
+function runs(samples: SampleInfo[]): Array<[number, number]> {
   const out: Array<[number, number]> = [];
   for (const sample of samples) {
     const last = out[out.length - 1];
@@ -144,7 +156,7 @@ function descriptor(w: Writer, tag: number, body: (inner: Writer) => void) {
   w.bytes(data);
 }
 
-function sampleEntry(w: Writer, track: Track) {
+function sampleEntry(w: Writer, track: TrackHead) {
   if (track.kind === "video") {
     w.box("avc1", () => {
       w.zeros(6);
@@ -190,7 +202,7 @@ function sampleEntry(w: Writer, track: Track) {
   });
 }
 
-function trak(w: Writer, track: Track, id: number, offsets: number[], wide: boolean) {
+function trak(w: Writer, track: Indexed, id: number, offsets: number[], wide: boolean) {
   const video = track.kind === "video";
   w.box("trak", () => {
     w.full("tkhd", 0, 3, () => {
@@ -209,11 +221,20 @@ function trak(w: Writer, track: Track, id: number, offsets: number[], wide: bool
       w.u32(video ? track.height * 0x10000 : 0);
     });
     w.box("mdia", () => {
-      w.full("mdhd", 0, 0, () => {
-        w.u32(0);
-        w.u32(0);
-        w.u32(track.timescale);
-        w.u32(trackDuration(track));
+      // Past four bytes of its timescale (13 hours at 90 kHz), the duration takes eight, as version 1 allows.
+      const long = trackDuration(track) > 0xffffffff;
+      w.full("mdhd", long ? 1 : 0, 0, () => {
+        if (long) {
+          w.u64(0);
+          w.u64(0);
+          w.u32(track.timescale);
+          w.u64(trackDuration(track));
+        } else {
+          w.u32(0);
+          w.u32(0);
+          w.u32(track.timescale);
+          w.u32(trackDuration(track));
+        }
         w.u16(0x55c4);
         w.u16(0);
       });
@@ -261,7 +282,7 @@ function trak(w: Writer, track: Track, id: number, offsets: number[], wide: bool
           w.full("stsz", 0, 0, () => {
             w.u32(0);
             w.u32(track.samples.length);
-            for (const sample of track.samples) w.u32(sample.data.length);
+            for (const sample of track.samples) w.u32(sample.size);
           });
           w.full(wide ? "co64" : "stco", 0, 0, () => {
             w.u32(offsets.length);
@@ -287,10 +308,12 @@ function interleave(tracks: Track[]): Array<{ track: number; sample: number }> {
   return order.sort((a, b) => a.time - b.time || a.track - b.track);
 }
 
-/** The bytes of an MP4 file holding `tracks`. */
-export function mux(tracks: Track[]): Uint8Array {
-  const order = interleave(tracks);
-  const mediaSize = order.reduce((sum, item) => sum + tracks[item.track].samples[item.sample].data.length, 0);
+/**
+ * Everything before the media: the file type, the index, and the media box's own header, for samples laid out one
+ * after another in `order`.
+ */
+function header(tracks: Indexed[], order: ReadonlyArray<{ track: number; sample: number }>): Uint8Array {
+  const mediaSize = order.reduce((sum, item) => sum + tracks[item.track].samples[item.sample].size, 0);
   const ftyp = new Writer();
   ftyp.box("ftyp", () => {
     ftyp.text("isom");
@@ -327,7 +350,7 @@ export function mux(tracks: Track[]): Uint8Array {
   let at = headerSize;
   for (const item of order) {
     offsets[item.track][item.sample] = at;
-    at += tracks[item.track].samples[item.sample].data.length;
+    at += tracks[item.track].samples[item.sample].size;
   }
 
   const file = new Writer();
@@ -341,6 +364,55 @@ export function mux(tracks: Track[]): Uint8Array {
     file.u32(mediaSize + 8);
     file.text("mdat");
   }
+  return file.result();
+}
+
+const indexed = (track: Track): Indexed => ({ ...track, samples: track.samples.map((sample) => ({ size: sample.data.length, duration: sample.duration, key: sample.key })) });
+
+/** The bytes of an MP4 file holding `tracks`. */
+export function mux(tracks: Track[]): Uint8Array {
+  const order = interleave(tracks);
+  const head = header(tracks.map(indexed), order);
+  const file = new Writer();
+  file.bytes(head);
   for (const item of order) file.bytes(tracks[item.track].samples[item.sample].data);
   return file.result();
+}
+
+/**
+ * An MP4 put together as its samples are encoded, for a clip of any length: each sample's bytes go into Blobs of about
+ * `batch` bytes as they come, which the browser can keep out of memory, and only their sizes are held until the end.
+ * The samples sit in the file in the order they were added.
+ */
+export class Mp4Builder {
+  private samples: SampleInfo[][] = [];
+  private order: Array<{ track: number; sample: number }> = [];
+  private pending: Uint8Array[] = [];
+  private pendingSize = 0;
+  private batches: Blob[] = [];
+
+  constructor(private batch = 8 << 20) {}
+
+  add(track: number, sample: Sample): void {
+    const list = (this.samples[track] ??= []);
+    this.order.push({ track, sample: list.length });
+    list.push({ size: sample.data.length, duration: sample.duration, key: sample.key });
+    this.pending.push(sample.data);
+    this.pendingSize += sample.data.length;
+    if (this.pendingSize >= this.batch) this.seal();
+  }
+
+  private seal() {
+    if (!this.pending.length) return;
+    this.batches.push(new Blob(this.pending as BlobPart[]));
+    this.pending = [];
+    this.pendingSize = 0;
+  }
+
+  /** The file: `tracks` described in the order their samples were numbered when added, then all of the media. */
+  finish(tracks: TrackHead[], type = "video/mp4"): Blob {
+    this.seal();
+    const head = header(tracks.map((track, index) => ({ ...track, samples: this.samples[index] ?? [] })), this.order);
+    return new Blob([head as BlobPart, ...this.batches], { type });
+  }
 }

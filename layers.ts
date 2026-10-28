@@ -2,9 +2,22 @@
    fractions of the frame's width and height, so a layout survives any export size. Free of the DOM, so it can be tested
    on its own. */
 
-import type { Layout } from "./render.js";
+import type { Layout, Visual } from "./render.js";
 
-export type LayerKind = "avatar" | "name" | "handle" | "title" | "visual" | "time" | "captions" | "links" | "text" | "image" | "shape";
+export type LayerKind = "avatar" | "name" | "handle" | "title" | "visual" | "time" | "captions" | "links" | "text" | "image" | "video" | "shape";
+
+export type ShapeKind = "rect" | "ellipse" | "triangle" | "star" | "heart" | "arrow" | "diamond" | "bubble";
+
+/** How a layer comes in when its time starts. */
+export type Entrance = "fade" | "rise" | "pop" | "slide" | "typewriter";
+
+/** A picture's tone: 1 leaves brightness, contrast and colour as they are; blur is in pixels of a 1080 frame. */
+export interface Adjust {
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  blur?: number;
+}
 
 /** A colour as CSS, or one of the theme's own, so a layer follows the theme until it is given a colour of its own. */
 export type Paint = string;
@@ -33,12 +46,27 @@ export interface Layer {
   color?: Paint;
   /** Captions: the colour behind the word being said. */
   highlight?: Paint;
-  /** For an image layer, the key of its picture. */
+  /** For an image or a video layer, the key of its picture or video. */
   image?: string;
   /** Corners, as a share of the shorter side: 0.5 makes a circle of a square. */
   radius?: number;
-  shape?: "rect" | "ellipse";
+  shape?: ShapeKind;
   fill?: Paint;
+  /** A sound layer's own look; the scene's when left out. */
+  visual?: Visual;
+  /** Pictures and videos: mirrored across, or upside down. */
+  flipX?: boolean;
+  flipY?: boolean;
+  adjust?: Adjust;
+  /** Words: a soft shadow under them, an outline round each letter, a colour behind each line, all in capitals. */
+  shadow?: boolean;
+  outline?: Paint;
+  background?: Paint;
+  uppercase?: boolean;
+  /** How it comes in, and the seconds into the clip it shows from and until; the whole clip when left out. */
+  enter?: Entrance;
+  from?: number;
+  until?: number;
 }
 
 export interface Box {
@@ -124,11 +152,12 @@ function local(layer: Box & { rotation: number }, x: number, y: number, width: n
   return { x: dx * Math.cos(angle) - dy * Math.sin(angle), y: dx * Math.sin(angle) + dy * Math.cos(angle) };
 }
 
-/** The topmost layer at a point, in frame fractions, on a frame `width` by `height`: shown, unlocked and under it. */
+/** The topmost shown layer at a point, in frame fractions, on a frame `width` by `height`. A locked one is found too, so
+ *  it can be picked and unlocked; it just doesn't move. */
 export function layerAt(layers: Layer[], x: number, y: number, width: number, height: number): Layer | null {
   for (let i = layers.length - 1; i >= 0; i--) {
     const layer = layers[i];
-    if (layer.hidden || layer.locked) continue;
+    if (layer.hidden) continue;
     const point = local(layer, x, y, width, height);
     if (Math.abs(point.x) <= (layer.w * width) / 2 && Math.abs(point.y) <= (layer.h * height) / 2) return layer;
   }
@@ -228,4 +257,65 @@ export function rotateLayer<T extends Box & { rotation: number }>(layer: T, x: n
   // Upright and each quarter turn hold the layer when it comes within a few degrees, since a finger has no Shift.
   else if (Math.abs(degrees - Math.round(degrees / 90) * 90) <= 4) degrees = Math.round(degrees / 90) * 90;
   return { ...layer, rotation: ((degrees % 360) + 360) % 360 };
+}
+
+export type PageEdge = "left" | "center" | "right" | "top" | "middle" | "bottom";
+
+/** A layer moved to an edge or the middle of the page, by the box it takes up on screen when turned. */
+export function alignToPage<T extends Box & { rotation: number }>(layer: T, edge: PageEdge, width: number, height: number): T {
+  const angle = (layer.rotation * Math.PI) / 180;
+  const w = layer.w * width;
+  const h = layer.h * height;
+  // Half the width and height of the box the turned layer fills, in fractions of the frame.
+  const halfX = (Math.abs(w * Math.cos(angle)) + Math.abs(h * Math.sin(angle))) / 2 / width;
+  const halfY = (Math.abs(w * Math.sin(angle)) + Math.abs(h * Math.cos(angle))) / 2 / height;
+  let cx = layer.x + layer.w / 2;
+  let cy = layer.y + layer.h / 2;
+  if (edge === "left") cx = halfX;
+  else if (edge === "center") cx = 0.5;
+  else if (edge === "right") cx = 1 - halfX;
+  else if (edge === "top") cy = halfY;
+  else if (edge === "middle") cy = 0.5;
+  else cy = 1 - halfY;
+  return { ...layer, x: cx - layer.w / 2, y: cy - layer.h / 2 };
+}
+
+/** Where a layer is in its way in, for one frame: its fade, its shift as shares of its own size, its scale, and the
+ *  share of its words shown so far. */
+export interface Motion {
+  alpha: number;
+  dx: number;
+  dy: number;
+  scale: number;
+  reveal: number;
+}
+
+// Seconds a layer takes to come in; typing takes longer, a letter at a time.
+const ENTER = 0.6;
+const TYPING = 1.4;
+const SETTLED: Motion = { alpha: 1, dx: 0, dy: 0, scale: 1, reveal: 1 };
+
+const easeOut = (p: number) => 1 - (1 - p) ** 3;
+// Past its size and back, the way a sticker lands.
+const overshoot = (p: number) => 1 + 2.2 * (p - 1) ** 3 + 1.2 * (p - 1) ** 2;
+
+/**
+ * A layer at `time` seconds into the clip. While the clip plays it shows only between its times, coming in its own
+ * way; while it is edited every layer is shown as it ends up, faint when the playhead is outside its times. Null means
+ * it isn't drawn.
+ */
+export function motionAt(layer: Pick<Layer, "enter" | "from" | "until">, time: number, playing: boolean): Motion | null {
+  const from = layer.from ?? 0;
+  const until = layer.until ?? Infinity;
+  const inside = time >= from && time <= until;
+  if (!playing) return inside ? SETTLED : { ...SETTLED, alpha: 0.3 };
+  if (!inside) return null;
+  if (!layer.enter) return SETTLED;
+  const p = Math.min(1, Math.max(0, (time - from) / (layer.enter === "typewriter" ? TYPING : ENTER)));
+  const eased = easeOut(p);
+  if (layer.enter === "fade") return { ...SETTLED, alpha: eased };
+  if (layer.enter === "rise") return { ...SETTLED, alpha: eased, dy: (1 - eased) * 0.4 };
+  if (layer.enter === "slide") return { ...SETTLED, alpha: eased, dx: (eased - 1) * 0.4 };
+  if (layer.enter === "pop") return { ...SETTLED, alpha: Math.min(1, p * 3), scale: 0.5 + 0.5 * overshoot(p) };
+  return { ...SETTLED, reveal: p };
 }

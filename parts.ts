@@ -52,6 +52,42 @@ export function joinParts(pieces: Float32Array[], sampleRate: number, fade = 0.1
   return out;
 }
 
+/** Reads one channel of a recording from `start` to `end` seconds at `sampleRate`, the way an AudioSource does. */
+export type Reader = (start: number, end: number, sampleRate: number) => Promise<Float32Array>;
+
+/**
+ * The clip's sound from `from` to `to` seconds into it, read from just the parts of the recording under that window,
+ * and the same, sample for sample, as that stretch of the parts joined whole with `joinParts`. A long clip is read this
+ * way a window at a time, so it never has to be held in memory at once; past either end of the clip is silence.
+ */
+export async function readClip(read: Reader, parts: Parts, from: number, to: number, sampleRate: number, fade = 0.15): Promise<Float32Array> {
+  // Counted in whole samples, as joinParts counts them, so windows read one after another line up exactly.
+  const first = Math.round(from * sampleRate);
+  const out = new Float32Array(Math.max(0, Math.round(to * sampleRate) - first));
+  const last = first + out.length;
+  let at = 0;
+  for (const [index, [start, end]] of parts.entries()) {
+    const head = Math.round(start * sampleRate);
+    const length = Math.max(0, Math.round(end * sampleRate) - head);
+    const lo = Math.max(first, at);
+    const hi = Math.min(last, at + length);
+    if (hi > lo) {
+      const piece = await read((head + lo - at) / sampleRate, (head + hi - at) / sampleRate, sampleRate);
+      const ramp = Math.min(Math.round(fade * sampleRate), Math.floor(length / 2));
+      for (let i = 0; i < hi - lo && i < piece.length; i++) {
+        const into = lo - at + i;
+        let gain = 1;
+        if (index > 0 && into < ramp) gain *= into / ramp;
+        if (index < parts.length - 1 && length - 1 - into < ramp) gain *= (length - 1 - into) / ramp;
+        out[lo - first + i] = piece[i] * gain;
+      }
+    }
+    at += length;
+    if (at >= last) break;
+  }
+  return out;
+}
+
 /** The captions of each part, cut to it and moved to where the part sits in the clip. */
 export function stitchCues(cues: readonly Cue[], parts: Parts): Cue[] {
   const out: Cue[] = [];

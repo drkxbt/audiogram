@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { defaultLayers, layerAt, moveLayer, resizeLayer, resizeTurned, rotateLayer, snapMove } from "../dist/layers.js";
+import { alignToPage, defaultLayers, layerAt, motionAt, moveLayer, resizeLayer, resizeTurned, rotateLayer, snapMove } from "../dist/layers.js";
 
 const near = (actual, expected, tolerance = 1e-6) => assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} ≉ ${expected}`);
 
@@ -21,7 +21,7 @@ test("every shape starts with the classic layout as layers: the name above the v
   }
 });
 
-test("a press finds the topmost layer under it, turned or not, and skips hidden and locked ones", () => {
+test("a press finds the topmost layer under it, turned or not, and skips hidden ones", () => {
   const layers = [
     { id: "a", kind: "shape", x: 0.1, y: 0.1, w: 0.5, h: 0.5, rotation: 0, opacity: 1 },
     { id: "b", kind: "shape", x: 0.3, y: 0.3, w: 0.2, h: 0.2, rotation: 0, opacity: 1 },
@@ -34,7 +34,8 @@ test("a press finds the topmost layer under it, turned or not, and skips hidden 
   assert.equal(layerAt(layers, 0.75, 0.24, 1, 1)?.id, "c");
   assert.equal(layerAt(layers, 0.62, 0.12, 1, 1), null);
   assert.equal(layerAt([{ ...layers[1], hidden: true }, layers[0]].reverse(), 0.35, 0.35, 1, 1)?.id, "a");
-  assert.equal(layerAt([layers[0], { ...layers[1], locked: true }], 0.35, 0.35, 1, 1)?.id, "a");
+  // A locked layer can still be picked, to be unlocked; it just doesn't move.
+  assert.equal(layerAt([layers[0], { ...layers[1], locked: true }], 0.35, 0.35, 1, 1)?.id, "b");
 });
 
 test("a moved layer snaps to the frame's centre and edges, and to other layers, within a few pixels", () => {
@@ -115,4 +116,46 @@ test("pulling one side leaves the other dimension alone, so a thin line stays th
   const longer = resizeLayer(line, "e", 0.1, 0, false);
   near(longer.w, 0.5);
   near(longer.h, 0.005);
+});
+
+const timed = (extra) => ({ id: "t", kind: "text", text: "Hello", x: 0.2, y: 0.2, w: 0.4, h: 0.1, rotation: 0, opacity: 1, ...extra });
+
+test("a layer shows only between its times while the clip plays, and faintly outside them while it is edited", () => {
+  const layer = timed({ from: 2, until: 5 });
+  assert.equal(motionAt(layer, 1.9, true), null);
+  assert.equal(motionAt(layer, 5.1, true), null);
+  assert.equal(motionAt(layer, 3, true).alpha, 1);
+  assert.ok(motionAt(layer, 1.9, false).alpha < 0.5, "a ghost while editing, so it can still be found");
+  assert.equal(motionAt(layer, 3, false).alpha, 1);
+  assert.equal(motionAt(timed({}), 0, true).alpha, 1, "no times means the whole clip");
+});
+
+test("each way in starts away from where the layer ends up and settles there", () => {
+  const at = (enter, time, playing = true) => motionAt(timed({ enter, from: 1 }), time, playing);
+  assert.ok(at("fade", 1.1).alpha < 1 && at("fade", 1.1).alpha > 0);
+  assert.equal(at("fade", 3).alpha, 1);
+  assert.ok(at("rise", 1.05).dy > 0);
+  assert.equal(at("rise", 3).dy, 0);
+  assert.ok(at("pop", 1.05).scale < 1);
+  near(at("pop", 3).scale, 1);
+  assert.ok(at("slide", 1.05).dx < 0);
+  assert.equal(at("slide", 3).dx, 0);
+  assert.ok(at("typewriter", 1.2).reveal < at("typewriter", 1.6).reveal);
+  assert.equal(at("typewriter", 9).reveal, 1);
+  // While editing, every layer is shown as it ends up.
+  const still = at("pop", 1.05, false);
+  assert.deepEqual([still.alpha, still.dx, still.dy, still.scale, still.reveal], [1, 0, 0, 1, 1]);
+});
+
+test("a layer lines up with the page's edges and middle, by the box it takes up when turned", () => {
+  const layer = { id: "a", kind: "shape", x: 0.3, y: 0.4, w: 0.2, h: 0.1, rotation: 0, opacity: 1 };
+  near(alignToPage(layer, "left", 1000, 1000).x, 0);
+  near(alignToPage(layer, "right", 1000, 1000).x, 0.8);
+  near(alignToPage(layer, "center", 1000, 1000).x, 0.4);
+  near(alignToPage(layer, "top", 1000, 1000).y, 0);
+  near(alignToPage(layer, "bottom", 1000, 1000).y, 0.9);
+  near(alignToPage(layer, "middle", 1000, 1000).y, 0.45);
+  // A quarter turn stands it up: 100 wide and 200 tall on screen, so its left edge is 50 left of its centre.
+  const turned = alignToPage({ ...layer, rotation: 90 }, "left", 1000, 1000);
+  near(turned.x + turned.w / 2, 0.05);
 });

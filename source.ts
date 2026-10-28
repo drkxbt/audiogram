@@ -31,6 +31,11 @@ export interface SourceOptions {
   onOutline?: (seconds: number) => void;
   /** Whether to read the outline at all; music under the voice needs none. True by default. */
   outline?: boolean;
+  /**
+   * How far the import has got, from 0 to 1: reading the file, then filling in the outline, which is most of the work
+   * for an MP3 or a WAV. A recording that has to be decoded whole holds still while it decodes, then reaches 1.
+   */
+  onProgress?: (fraction: number) => void;
 }
 
 function mono(buffer: AudioBuffer): Float32Array {
@@ -59,6 +64,41 @@ function decode(bytes: ArrayBuffer, sampleRate: number): Promise<Float32Array> {
 }
 
 const rest = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** A blob's bytes, read a chunk at a time so `onRead` can follow along from 0 to 1. */
+async function bytesOf(blob: Blob, onRead?: (fraction: number) => void): Promise<Uint8Array<ArrayBuffer>> {
+  if (!onRead || typeof blob.stream !== "function") return new Uint8Array(await blob.arrayBuffer());
+  const out = new Uint8Array(blob.size);
+  const reader = blob.stream().getReader();
+  let at = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    out.set(value.subarray(0, out.length - at), at);
+    at = Math.min(out.length, at + value.length);
+    onRead(at / Math.max(1, out.length));
+  }
+  return at === out.length ? out : out.slice(0, at);
+}
+
+/** A file at an address, as a blob, with `onRead` following the download when the server says how long it is. */
+async function download(url: string, onRead?: (fraction: number) => void): Promise<Blob> {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`The recording could not be fetched (${response.status}).`);
+  const size = Number(response.headers.get("content-length")) || 0;
+  if (!onRead || !size || !response.body) return response.blob();
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    got += value.length;
+    onRead(Math.min(1, got / size));
+  }
+  return new Blob(chunks as BlobPart[], { type: response.headers.get("content-type") ?? "" });
+}
 
 /** `samples` at `from` rate, made `to` rate. */
 async function resample(samples: Float32Array, from: number, to: number): Promise<Float32Array> {
@@ -116,8 +156,11 @@ function wavReader(blob: Blob, info: WavInfo) {
  * after this resolves. Anything else the browser can play, such as M4A or the sound of a video, is decoded whole, as
  * a short recording can be.
  */
-export async function openSource(source: string | Blob, { onOutline, outline: wantOutline = true }: SourceOptions = {}): Promise<AudioSource> {
-  const blob = typeof source === "string" ? await (await fetch(source)).blob() : source;
+export async function openSource(source: string | Blob, { onOutline, outline: wantOutline = true, onProgress }: SourceOptions = {}): Promise<AudioSource> {
+  // A share of the import for each step: fetching, reading the file, then the outline (or the whole decode).
+  const step = (from: number, to: number) => (onProgress ? (fraction: number) => onProgress(from + (to - from) * fraction) : undefined);
+  const fetched = typeof source === "string" ? 0.1 : 0;
+  const blob = typeof source === "string" ? await download(source, step(0, fetched)) : source;
   const head = new Uint8Array(await blob.slice(0, 10).arrayBuffer());
   // An ID3 tag can hold pictures; the audio is looked for after it.
   const tag = head[0] === 0x49 && head[1] === 0x44 && head[2] === 0x33
@@ -126,7 +169,7 @@ export async function openSource(source: string | Blob, { onOutline, outline: wa
   const sample = new Uint8Array(await blob.slice(tag, tag + 65536).arrayBuffer());
   const looksMp3 = (indexMp3(sample)?.frames ?? 0) >= 8;
   const wav = !looksMp3 ? parseWav(new Uint8Array(await blob.slice(0, 65536).arrayBuffer()), blob.size) : null;
-  const index = looksMp3 ? indexMp3(new Uint8Array(await blob.arrayBuffer())) : null;
+  const index = looksMp3 ? indexMp3(await bytesOf(blob, step(fetched, fetched + 0.05))) : null;
 
   const url = URL.createObjectURL(blob);
   let closed = false;
@@ -135,7 +178,7 @@ export async function openSource(source: string | Blob, { onOutline, outline: wa
     // Whole, at 48 kHz: the rate the AAC encoder and most players expect.
     let samples: Float32Array;
     try {
-      samples = await decode(await blob.arrayBuffer(), 48000);
+      samples = await decode((await bytesOf(blob, step(fetched, 0.4))).buffer, 48000);
     } catch (error) {
       URL.revokeObjectURL(url);
       throw error;
@@ -143,6 +186,7 @@ export async function openSource(source: string | Blob, { onOutline, outline: wa
     const duration = samples.length / 48000;
     const outline = peaks(samples, Math.max(1, Math.round(duration * OUTLINE_RATE)));
     onOutline?.(duration);
+    onProgress?.(1);
     return {
       duration,
       url,
@@ -161,6 +205,8 @@ export async function openSource(source: string | Blob, { onOutline, outline: wa
   const outline = new Float32Array(Math.max(1, Math.round(duration * OUTLINE_RATE)) * 2);
   const stretches = Math.ceil(duration / OUTLINE_STRETCH);
   let outlined = 0;
+  const outlining = step(index ? fetched + 0.05 : fetched, 1);
+  if (!wantOutline) onProgress?.(1);
 
   // Front to back, a stretch at a time.
   if (wantOutline) void (async () => {
@@ -178,6 +224,7 @@ export async function openSource(source: string | Blob, { onOutline, outline: wa
       if (closed) break;
       outlined = Math.min(duration, end);
       onOutline?.(outlined);
+      outlining?.(outlined / duration);
       await rest(OUTLINE_REST);
     }
   })();

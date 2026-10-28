@@ -2,8 +2,8 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fft, peaks, rms, spectrum, Smoother } from "../dist/wave.js";
 import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, parseTime, spread, timeWords, toSRT, toVTT } from "../dist/captions.js";
-import { mux } from "../dist/mp4.js";
-import { Painter, SIZES, THEMES } from "../dist/render.js";
+import { Mp4Builder, mux } from "../dist/mp4.js";
+import { clock, Painter, SIZES, THEMES } from "../dist/render.js";
 import { defaultLayers } from "../dist/layers.js";
 
 const close = (actual, expected, tolerance = 1e-6, message) => assert.ok(Math.abs(actual - expected) <= tolerance, message ?? `${actual} ≉ ${expected}`);
@@ -197,6 +197,56 @@ test("an MP4 with its index first, every sample where the index says", () => {
   assert.equal(String.fromCharCode(...file.subarray(hdlr.body + 8, hdlr.body + 12)), "soun");
 });
 
+test("an MP4 built a sample at a time keeps the bytes in the order they came, each where the index says", async () => {
+  const frame = (n) => Uint8Array.from({ length: 40 + n }, (_, i) => (n * 13 + i) & 0xff);
+  const head = [
+    { kind: "video", width: 640, height: 360, timescale: 90000, description: Uint8Array.from([1, 0x42, 0xe0, 0x1e, 0xff]) },
+    { kind: "audio", sampleRate: 48000, channels: 1, timescale: 48000, description: Uint8Array.from([0x11, 0x88]) },
+  ];
+  // Batches of 100 bytes, so the media spans several of them.
+  const builder = new Mp4Builder(100);
+  const added = [[], []];
+  for (const [track, n] of [[1, 0], [1, 1], [0, 2], [0, 3], [1, 4], [0, 5], [0, 6]]) {
+    const sample = { data: frame(n), duration: track ? 1024 : 3000, key: track === 1 || n === 2 };
+    builder.add(track, sample);
+    added[track].push(sample);
+  }
+  const file = new Uint8Array(await builder.finish(head).arrayBuffer());
+  const view = new DataView(file.buffer);
+  const top = boxes(file);
+  assert.deepEqual(top.map((box) => box.type), ["ftyp", "moov", "mdat"]);
+  const traks = boxes(file, top[1].body, top[1].end).filter((box) => box.type === "trak");
+  const firstOffset = (index) => view.getUint32(child(file, path(file, traks[index], "mdia", "minf", "stbl"), "stco").body + 8);
+  let last = 0;
+  for (const [index, samples] of added.entries()) {
+    const stbl = path(file, traks[index], "mdia", "minf", "stbl");
+    const stsz = child(file, stbl, "stsz");
+    const offsets = child(file, stbl, "stco");
+    assert.equal(view.getUint32(stsz.body + 8), samples.length);
+    samples.forEach((sample, n) => {
+      const offset = view.getUint32(offsets.body + 8 + 4 * n);
+      assert.deepEqual(file.subarray(offset, offset + sample.data.length), sample.data, `sample ${n} of track ${index}`);
+      last = Math.max(last, offset + sample.data.length);
+    });
+  }
+  assert.equal(last, file.length, "the media ends the file");
+  assert.equal(top[2].end, file.length);
+  assert.ok(firstOffset(1) < firstOffset(0), "the first sound came first, so it sits first");
+});
+
+test("a track longer than 32 bits of its timescale keeps its whole duration", () => {
+  // Three samples of 2e9 ticks at 90 kHz: about 18.5 hours, past what four bytes hold.
+  const video = { kind: "video", width: 640, height: 360, timescale: 90000, description: Uint8Array.from([1, 0x42, 0xe0, 0x1e, 0xff]), samples: [0, 1, 2].map((n) => ({ data: Uint8Array.of(n), duration: 2e9, key: n === 0 })) };
+  const file = mux([video]);
+  const view = new DataView(file.buffer);
+  const moov = boxes(file).find((box) => box.type === "moov");
+  const trak = boxes(file, moov.body, moov.end).find((box) => box.type === "trak");
+  const mdhd = path(file, trak, "mdia", "mdhd");
+  assert.equal(file[mdhd.body], 1, "version 1, with 64-bit times");
+  assert.equal(view.getUint32(mdhd.body + 20), 90000, "timescale");
+  assert.equal(Number(view.getBigUint64(mdhd.body + 24)), 6e9, "duration");
+});
+
 // A 2D context that accepts every call and records nothing, so the painter runs outside a browser.
 function fakeContext(width, height) {
   const any = new Proxy(function () {}, { get: (_, key) => (key === "width" ? 0 : any), apply: () => any, set: () => true });
@@ -285,4 +335,11 @@ test("a 9:16 story is 1080 by 1920, and its name, visual and captions stack down
   assert.ok(top("name") < top("title") && top("title") < top("time") && top("time") < top("captions"));
   const captions = defaultLayers("story").find((layer) => layer.kind === "captions");
   assert.ok((captions.y + captions.h) * 1920 < 1920 - 1080 * 0.074);
+});
+
+test("the clip's clock counts minutes, then hours once there are sixty of them", () => {
+  assert.equal(clock(59.9), "0:59");
+  assert.equal(clock(600), "10:00");
+  assert.equal(clock(3602.4), "1:00:02");
+  assert.equal(clock(5 * 3600 + 61), "5:01:01");
 });
