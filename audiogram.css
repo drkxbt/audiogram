@@ -31,8 +31,8 @@
 .ag-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
-  grid-template-areas: "stage panel" "timeline timeline";
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-areas: "stage panel" "timeline timeline" "parts parts";
+  grid-template-rows: minmax(0, 1fr) auto auto;
   height: 100%;
 }
 .ag[data-drop] { box-shadow: inset 0 0 0 2px var(--ag-accent); }
@@ -193,6 +193,16 @@
   .ag-play:not(:disabled):hover { background: var(--ag-text); color: var(--ag-bg); opacity: 0.88; }
 }
 .ag-clock { flex: none; min-width: 92px; color: var(--ag-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+/* The parts of a clip made of several: one chip each, in order, under the recording. */
+.ag-parts { grid-area: parts; display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0 12px 10px; list-style: none; }
+.ag-parts:empty { display: none; }
+.ag-part { display: inline-flex; align-items: center; border-radius: 8px; background: var(--ag-surface); box-shadow: 0 0 0 1px var(--ag-line); touch-action: none; }
+.ag-part-pick { padding: 7px 4px 7px 10px; border: 0; background: none; color: var(--ag-text); font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: grab; }
+.ag-part-pick:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; border-radius: 6px; }
+.ag-part .ag-part-remove { width: 28px; height: 28px; }
+.ag-part .ag-part-remove svg { width: 15px; height: 15px; }
+.ag[data-reordering] .ag-part-pick { cursor: grabbing; }
 .ag-track {
   position: relative;
   flex: 1;
@@ -278,8 +288,8 @@
 @container (max-width: 720px) {
   .ag-grid {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "stage" "timeline" "panel";
-    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas: "stage" "timeline" "parts" "panel";
+    grid-template-rows: auto auto auto minmax(0, 1fr);
   }
   .ag-stage { padding: 12px; }
   .ag-preview { max-height: 46vh; }

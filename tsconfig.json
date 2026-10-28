@@ -25,6 +25,7 @@
     "mp4.ts",
     "render.ts",
     "export.ts",
-    "editor.ts"
+    "editor.ts",
+    "parts.ts"
   ]
 }

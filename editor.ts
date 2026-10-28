@@ -1,6 +1,7 @@
 import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, spread, toSRT, type Cue } from "./captions.js";
 import { exportClip, type ExportResult } from "./export.js";
 import { Painter, SIZES, THEMES, type Layout, type Overlay, type Scene, type Theme, type Visual } from "./render.js";
+import { clipTimeAt, partsLength, stitch, stitchCues } from "./parts.js";
 import { peaks } from "./wave.js";
 
 export interface Labels {
@@ -13,6 +14,11 @@ export interface Labels {
   exported: (seconds: number) => string;
   failed: string;
   timeline: string;
+  addPart: string;
+  partsFull: string;
+  parts: string;
+  part: (index: number, from: string, to: string) => string;
+  removePart: (index: number) => string;
   clipStart: string;
   clipEnd: string;
   layouts: Record<Layout, string>;
@@ -68,6 +74,10 @@ export interface EditorOptions {
   onExport?: (result: ExportResult) => void;
   /** Drawn over every frame of the preview and the export. */
   overlay?: Overlay;
+  /** Stretches of the recording, [start, end] in seconds, played one after another as the clip. */
+  parts?: Array<[number, number]>;
+  /** Called after the parts change through the editor: added, removed or reordered. */
+  onParts?: (parts: Array<[number, number]>) => void;
   /** Called after the look changes through the editor, at most once a frame. */
   onChange?: (settings: Settings) => void;
 }
@@ -99,6 +109,9 @@ export interface Editor {
   pause(): void;
   export(): Promise<ExportResult | null>;
   readonly settings: Settings;
+  /** The parts the clip is made of, in order; empty when the clip is just the selected stretch. */
+  readonly parts: Array<[number, number]>;
+  setParts(parts: Array<[number, number]>): void;
   /** The recording on show, as it was opened or given; null before one is. */
   readonly source: string | Blob | null;
   /** The recording as the editor decoded it, one channel at 48 kHz, for a page to work on without decoding it again. */
@@ -116,6 +129,11 @@ const DEFAULT_LABELS: Labels = {
   exporting: (percent) => `Making the video, ${percent}%`,
   exported: (seconds) => `The video is ready: ${formatTime(seconds)} long.`,
   failed: "The video couldn't be made in this browser.",
+  addPart: "Add this stretch as a part of the clip",
+  partsFull: "The parts already fill the longest clip",
+  parts: "Parts of the clip, in order",
+  part: (index, from, to) => `Part ${index}, ${from} to ${to}`,
+  removePart: (index) => `Remove part ${index}`,
   timeline: "The recording",
   clipStart: "Clip start",
   clipEnd: "Clip end",
@@ -166,6 +184,7 @@ const ICONS: Record<string, string> = {
   save: '<path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/>',
   add: '<path d="M12 5v14M5 12h14"/>',
   remove: '<path d="M6.5 6.5l11 11m0-11-11 11"/>',
+  addPart: '<path d="M4 7h11M4 12h11M4 17h7M18.5 14v7M15 17.5h7"/>',
 };
 
 const MIN_LENGTH = 1;
@@ -244,6 +263,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let logoSource: Blob | string | null = options.logo ?? null;
   let source: string | Blob | null = null;
   let overlay: Overlay | null = options.overlay ?? null;
+  // The clip is the parts, back to back, when there are any; otherwise the selected stretch alone.
+  let parts: Array<[number, number]> = (options.parts ?? []).map(([start, end]) => [start, end]);
+  let stitched: { key: string; samples: Float32Array } | null = null;
+  const spans = (): Array<[number, number]> => (parts.length ? parts : [range]);
+  const clipLength = () => (parts.length ? partsLength(parts) : range[1] - range[0]);
+  const clipTime = () => (parts.length ? clipTimeAt(parts, playhead) ?? 0 : playhead - range[0]);
   let tapping = false;
   let tapIndex = 0;
   let exporting = false;
@@ -443,13 +468,16 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const exportButton = iconButton("ag-export", labels.export, ICONS.export);
   const meter = element("span", "ag-meter");
   exportButton.append(meter);
-  timeline.append(openButton, audioInput, playButton, clock, track, exportButton);
+  const addPartButton = iconButton("ag-add-part", labels.addPart, ICONS.addPart);
+  timeline.append(openButton, audioInput, playButton, clock, track, addPartButton, exportButton);
+  const partList = element("ol", "ag-parts");
+  partList.setAttribute("aria-label", labels.parts);
 
   const live = element("div", "ag-live");
   live.setAttribute("role", "status");
   // The editor answers its own width, so the parts sit in a grid inside it rather than on it.
   const grid = element("div", "ag-grid");
-  grid.append(stage, panel, timeline);
+  grid.append(stage, panel, timeline, partList);
   root.append(grid, live);
   container.append(root);
 
@@ -475,9 +503,20 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     overlay: overlay ?? undefined,
     backdrop,
     logo,
-    captions: paginate(clip(cues, range[0], range[1]), pageLength(layout)),
-    audio: recording ? { samples: recording.samples, sampleRate: recording.sampleRate, start: range[0], end: range[1] } : { samples: new Float32Array(1), sampleRate: 48000, start: 0, end: 0 },
+    captions: paginate(parts.length ? stitchCues(cues, parts) : clip(cues, range[0], range[1]), pageLength(layout)),
+    audio: !recording
+      ? { samples: new Float32Array(1), sampleRate: 48000, start: 0, end: 0 }
+      : parts.length
+        ? { samples: stitchedSamples(), sampleRate: recording.sampleRate, start: 0, end: partsLength(parts) }
+        : { samples: recording.samples, sampleRate: recording.sampleRate, start: range[0], end: range[1] },
   });
+
+  // The parts' sound joined end to end, made again only when the parts or the recording change.
+  function stitchedSamples(): Float32Array {
+    const key = `${recording!.url}|${parts.map((part) => part.join("-")).join(",")}`;
+    if (stitched?.key !== key) stitched = { key, samples: stitch(recording!.samples, recording!.sampleRate, parts) };
+    return stitched.samples;
+  }
   let painter = new Painter(scene());
   const ctx = preview.getContext("2d", { alpha: false })!;
 
@@ -492,8 +531,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }
 
   function paint() {
-    painter.paint(ctx, playhead - range[0]);
-    const index = cueAt(painter.scene.captions, playhead - range[0]);
+    const time = clipTime();
+    painter.paint(ctx, time);
+    const index = cueAt(painter.scene.captions, time);
     preview.setAttribute("aria-label", [title, speaker, index >= 0 ? painter.scene.captions[index].text : ""].filter(Boolean).join(". "));
   }
 
@@ -556,7 +596,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       const low = peakCache.data[i * 2];
       const high = peakCache.data[i * 2 + 1];
       const time = ((i + 0.5) / bars) * recording.duration;
-      g.fillStyle = time >= range[0] && time <= range[1] ? inside : outside;
+      const lit = (time >= range[0] && time <= range[1]) || parts.some(([start, end]) => time >= start && time <= end);
+      g.fillStyle = lit ? inside : outside;
       const amplitude = Math.max(1 * ratio, (high - low) * mid * 0.92);
       g.fillRect(i * 3 * ratio, mid - amplitude / 2, 2 * ratio, amplitude);
     }
@@ -575,7 +616,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       handleNode.setAttribute("aria-valuenow", String(Math.round(value * 10) / 10));
       handleNode.setAttribute("aria-valuetext", `${formatTime(value)}, clip ${formatTime(length)} long`);
     }
-    clock.textContent = `${formatTime(Math.max(0, playhead - range[0]))} / ${formatTime(length)}`;
+    clock.textContent = `${formatTime(Math.max(0, clipTime()))} / ${formatTime(clipLength())}`;
+    // A part can be added while the clip has room for the whole selected stretch.
+    const full = !recording || partsLength(parts) + length > maxLength + 1e-6;
+    addPartButton.disabled = full;
+    addPartButton.setAttribute("aria-label", recording && full ? labels.partsFull : labels.addPart);
+    addPartButton.title = recording && full ? labels.partsFull : labels.addPart;
   }
 
   function setRange(start: number, end: number, which?: "start" | "end") {
@@ -597,17 +643,24 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // Playback: the picture follows the sound.
 
   let frame = 0;
+  let playing = 0;
   function tick() {
     frame = 0;
     if (audio.paused) return;
     playhead = audio.currentTime;
-    if (playhead >= range[1]) {
-      stop();
-      playhead = range[0];
-      painter.reset();
-      paint();
-      placeTimeline();
-      return;
+    const list = spans();
+    if (playhead >= list[playing][1]) {
+      playing++;
+      if (playing >= list.length) {
+        stop();
+        playhead = list[0][0];
+        painter.reset();
+        paint();
+        placeTimeline();
+        return;
+      }
+      playhead = list[playing][0];
+      audio.currentTime = playhead;
     }
     paint();
     placeTimeline();
@@ -616,7 +669,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   function play() {
     if (!recording || exporting) return;
-    if (playhead >= range[1] - 0.05 || playhead < range[0]) playhead = range[0];
+    const list = spans();
+    playing = list.findIndex(([start, end]) => playhead >= start && playhead < end - 0.05);
+    if (playing < 0) {
+      playing = 0;
+      playhead = list[0][0];
+    }
     audio.currentTime = playhead;
     painter.reset();
     void audio.play();
@@ -723,6 +781,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (recording) URL.revokeObjectURL(recording.url);
     recording = { ...next, duration: next.samples.length / next.sampleRate };
     source = from;
+    if (parts.length) {
+      parts = [];
+      renderParts();
+      options.onParts?.([]);
+    }
     audio.src = recording.url;
     root.dataset.state = "ready";
     live.textContent = "";
@@ -746,7 +809,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
           exportButton.setAttribute("aria-label", labels.exporting(Math.round(fraction * 100)));
         },
       });
-      announce(labels.exported(range[1] - range[0]));
+      announce(labels.exported(clipLength()));
       if (options.onExport) options.onExport(result);
       else {
         const link = element("a", "");
@@ -767,6 +830,88 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       meter.style.removeProperty("--progress");
     }
   }
+
+  // Parts: the add key keeps the selected stretch; each chip selects its part, removes it, or drags to a new place.
+
+  function partsChanged() {
+    renderParts();
+    drawWave();
+    placeTimeline();
+    rebuild();
+    options.onParts?.(parts.map(([start, end]) => [start, end]));
+  }
+
+  function renderParts() {
+    partList.replaceChildren(...parts.map(([start, end], index) => {
+      const item = element("li", "ag-part");
+      item.dataset.index = String(index);
+      const pick = element("button", "ag-part-pick");
+      pick.type = "button";
+      pick.textContent = `${index + 1} · ${formatTime(start)}–${formatTime(end)}`;
+      pick.setAttribute("aria-label", labels.part(index + 1, formatTime(start), formatTime(end)));
+      pick.addEventListener("click", () => {
+        if (reordered) return;
+        setRange(start, end);
+        seek(start);
+      });
+      const remove = iconButton("ag-part-remove", labels.removePart(index + 1), ICONS.remove);
+      remove.addEventListener("click", () => {
+        parts.splice(index, 1);
+        partsChanged();
+      });
+      item.append(pick, remove);
+      return item;
+    }));
+  }
+
+  addPartButton.addEventListener("click", () => {
+    if (!recording || partsLength(parts) + range[1] - range[0] > maxLength + 1e-6) return;
+    parts.push([range[0], range[1]]);
+    partsChanged();
+    announce(labels.part(parts.length, formatTime(range[0]), formatTime(range[1])));
+  });
+
+  let reorder: { pointerId: number; index: number; x: number } | null = null;
+  let reordered = false;
+  partList.addEventListener("pointerdown", (event) => {
+    const item = (event.target as Element).closest<HTMLElement>(".ag-part");
+    if (!item || (event.target as Element).closest(".ag-part-remove") || event.button !== 0) return;
+    reorder = { pointerId: event.pointerId, index: Number(item.dataset.index), x: event.clientX };
+    reordered = false;
+  });
+  partList.addEventListener("pointermove", (event) => {
+    if (!reorder || event.pointerId !== reorder.pointerId) return;
+    // A few pixels of travel before it counts as a drag, so a tap still picks the part.
+    if (!reordered && Math.abs(event.clientX - reorder.x) < 6) return;
+    if (!reordered) {
+      reordered = true;
+      try {
+        partList.setPointerCapture(event.pointerId);
+      } catch {
+        // A pointer from a script can't be captured; the drag still follows it over the chips.
+      }
+      root.dataset.reordering = "";
+    }
+    const over = [...partList.children].findIndex((child) => {
+      const box = child.getBoundingClientRect();
+      return event.clientX >= box.left && event.clientX <= box.right;
+    });
+    if (over < 0 || over === reorder.index) return;
+    const [moved] = parts.splice(reorder.index, 1);
+    parts.splice(over, 0, moved);
+    reorder.index = over;
+    renderParts();
+  });
+  const endReorder = () => {
+    if (reorder && reordered) partsChanged();
+    reorder = null;
+    delete root.dataset.reordering;
+    // The click that ends a drag isn't a pick.
+    setTimeout(() => (reordered = false));
+  };
+  partList.addEventListener("pointerup", endReorder);
+  partList.addEventListener("pointercancel", endReorder);
+  renderParts();
 
   // Pointer on the recording: drag an edge, drag the clip along, or put the playhead down.
 
@@ -954,6 +1099,16 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     export: exportVideo,
     get settings() {
       return settings();
+    },
+    get parts() {
+      return parts.map(([start, end]) => [start, end] as [number, number]);
+    },
+    setParts(next) {
+      parts = next.filter(([start, end]) => end > start).map(([start, end]) => [start, end]);
+      renderParts();
+      drawWave();
+      placeTimeline();
+      rebuild();
     },
     get source() {
       return source;
