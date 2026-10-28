@@ -26,6 +26,7 @@
     "render.ts",
     "export.ts",
     "editor.ts",
-    "parts.ts"
+    "parts.ts",
+    "mix.ts"
   ]
 }

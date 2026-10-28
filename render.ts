@@ -51,6 +51,8 @@ export interface Scene {
   backdrop?: CanvasImageSource | null;
   /** A brand mark, small in the top left margin. */
   logo?: CanvasImageSource | null;
+  /** Music for the export's sound only, at the clip's sample rate; the picture follows the voice alone. */
+  music?: { samples: Float32Array; gain: number } | null;
 }
 
 /** Where a frame is, for an overlay: seconds into the clip, the canvas's size, and one design pixel at this size. */

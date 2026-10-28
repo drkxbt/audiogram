@@ -1,4 +1,5 @@
 import { mux, type Sample } from "./mp4.js";
+import { mixMusic } from "./mix.js";
 import { Painter, SIZES, type Scene } from "./render.js";
 
 export interface ExportOptions {
@@ -52,7 +53,7 @@ export async function exportClip(scene: Scene, options: ExportOptions = {}): Pro
 
 const abortError = () => new DOMException("The export was stopped.", "AbortError");
 
-/** The clip's own stretch of the recording, softened over a few milliseconds at each end so it doesn't click. */
+/** The clip's own stretch of the recording, softened over a few milliseconds at each end so it doesn't click, with any music under it. */
 function clipSamples(scene: Scene): Float32Array<ArrayBuffer> {
   const { samples, sampleRate, start, end } = scene.audio;
   const out = samples.slice(Math.max(0, Math.round(start * sampleRate)), Math.min(samples.length, Math.round(end * sampleRate)));
@@ -61,7 +62,7 @@ function clipSamples(scene: Scene): Float32Array<ArrayBuffer> {
     out[i] *= i / fade;
     out[out.length - 1 - i] *= i / fade;
   }
-  return out;
+  return scene.music ? mixMusic(out, scene.music.samples, sampleRate, { gain: scene.music.gain }) : out;
 }
 
 async function encodeMp4(scene: Scene, codecs: { video: string; audio: string }, width: number, height: number, options: ExportOptions): Promise<ExportResult> {

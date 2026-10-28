@@ -203,6 +203,11 @@
 .ag-part .ag-part-remove { width: 28px; height: 28px; }
 .ag-part .ag-part-remove svg { width: 15px; height: 15px; }
 .ag[data-reordering] .ag-part-pick { cursor: grabbing; }
+
+/* The music's level, under the keys that set the look. */
+.ag-music-level { display: grid; gap: 6px; }
+.ag-music-level[hidden] { display: none; }
+.ag-slider { width: 100%; margin: 0; accent-color: var(--ag-accent); }
 .ag-track {
   position: relative;
   flex: 1;

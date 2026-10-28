@@ -32,6 +32,9 @@ export interface Labels {
   backgroundOff: string;
   logo: string;
   logoOff: string;
+  music: string;
+  musicOff: string;
+  musicVolume: string;
   captions: string;
   tap: string;
   tapNext: (text: string) => string;
@@ -63,6 +66,10 @@ export interface EditorOptions {
   background?: string | Blob;
   /** A brand mark, small in the top left corner. */
   logo?: string | Blob;
+  /** Music under the voice, any audio the browser can decode; it loops and fades in and out. */
+  music?: string | Blob;
+  /** The music's level, 0 to 1. 0.25 by default, well under the voice. */
+  musicVolume?: number;
   layout?: Layout;
   visual?: Visual;
   theme?: number | Theme;
@@ -92,6 +99,9 @@ export interface Settings {
   /** The background picture and the logo, the same way; null for none. */
   background: Blob | string | null;
   logo: Blob | string | null;
+  /** The music the user opened, or the address it was given; null for none. Its level, 0 to 1. */
+  music: Blob | string | null;
+  musicVolume: number;
   layout: Layout;
   visual: Visual;
   /** An index into THEMES, or the theme itself when it isn't one of them. */
@@ -148,6 +158,9 @@ const DEFAULT_LABELS: Labels = {
   backgroundOff: "Remove the background picture",
   logo: "Add a logo",
   logoOff: "Remove the logo",
+  music: "Add background music",
+  musicOff: "Remove the background music",
+  musicVolume: "Music volume",
   captions: "Captions",
   tap: "Time the captions by tapping",
   tapNext: (text) => `Tap the picture when this starts: ${text}`,
@@ -178,6 +191,7 @@ const ICONS: Record<string, string> = {
   cover: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="m20.5 16-5-5-8 8.5"/>',
   background: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="m3.5 15.5 4.5-4.5 4 4 3-3 5.5 5.5"/><path d="M15.5 9.5h.01"/>',
   logo: '<path d="M12 3.5 19.5 7.75v8.5L12 20.5l-7.5-4.25v-8.5Z"/><path d="m9.5 12 1.8 1.8 3.2-3.6"/>',
+  music: '<path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',
   tap: '<path d="M9 11V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V11m0-.5a1.5 1.5 0 0 1 3 0v4.5a6 6 0 0 1-6 6h-.6a5 5 0 0 1-3.9-1.9L4.8 15a1.5 1.5 0 0 1 2.3-1.9L9 15"/>',
   spread: '<path d="M4 6h16M4 12h10M4 18h13"/>',
   file: '<path d="M6 4.5h8l4 4V19a.5.5 0 0 1-.5.5h-11A.5.5 0 0 1 6 19ZM14 4.5V9h4"/><path d="M9 13h6M9 16h4"/>',
@@ -261,6 +275,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let backdropSource: Blob | string | null = options.background ?? null;
   let logo: HTMLImageElement | null = null;
   let logoSource: Blob | string | null = options.logo ?? null;
+  let music: { samples: Float32Array; url: string; duration: number } | null = null;
+  let musicSource: Blob | string | null = options.music ?? null;
+  let musicVolume = Math.min(1, Math.max(0, options.musicVolume ?? 0.25));
   let source: string | Blob | null = null;
   let overlay: Overlay | null = options.overlay ?? null;
   // The clip is the parts, back to back, when there are any; otherwise the selected stretch alone.
@@ -353,11 +370,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   coverInput.tabIndex = -1;
   // The background picture and the logo each take one key: it opens a picture when there is none and removes it when
   // there is one, pressed while it's on.
-  const pictureKey = (className: string, add: string, remove: string, markup: string, apply: (file: Blob | null) => Promise<void>) => {
+  const pictureKey = (className: string, add: string, remove: string, markup: string, apply: (file: Blob | null) => Promise<void>, accept = "image/*") => {
     const button = iconButton(className, add, markup);
     const input = element("input", "ag-hidden");
     input.type = "file";
-    input.accept = "image/*";
+    input.accept = accept;
     input.tabIndex = -1;
     const mark = (on: boolean) => {
       button.setAttribute("aria-pressed", String(on));
@@ -392,7 +409,44 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     rebuild();
     changed();
   });
-  looks.append(layoutChoice, visualChoice, coverButton, coverInput, backgroundKey.button, backgroundKey.input, logoKey.button, logoKey.input);
+  // Music has its key with the pictures, and a level slider that shows once there is music.
+  const musicAudio = new Audio();
+  musicAudio.loop = true;
+  musicAudio.preload = "auto";
+  const musicLevel = element("label", "ag-field ag-music-level");
+  const musicLevelName = element("span", "ag-field-name");
+  musicLevelName.textContent = labels.musicVolume;
+  const musicSlider = element("input", "ag-slider");
+  musicSlider.type = "range";
+  musicSlider.min = "0";
+  musicSlider.max = "100";
+  musicSlider.value = String(Math.round(musicVolume * 100));
+  musicLevel.append(musicLevelName, musicSlider);
+  musicLevel.hidden = true;
+  const setMusic = async (file: Blob | string | null) => {
+    if (music) URL.revokeObjectURL(music.url);
+    music = null;
+    musicAudio.pause();
+    musicAudio.removeAttribute("src");
+    if (file) {
+      const next = await decode(file);
+      music = { ...next, duration: next.samples.length / next.sampleRate };
+      musicAudio.src = music.url;
+      musicAudio.volume = musicVolume;
+    }
+    musicSource = file;
+    musicLevel.hidden = !music;
+  };
+  const musicKey = pictureKey("ag-music", labels.music, labels.musicOff, ICONS.music, async (file) => {
+    await setMusic(file);
+    changed();
+  }, "audio/*");
+  musicSlider.addEventListener("input", () => {
+    musicVolume = Number(musicSlider.value) / 100;
+    musicAudio.volume = musicVolume;
+    changed();
+  });
+  looks.append(layoutChoice, visualChoice, coverButton, coverInput, backgroundKey.button, backgroundKey.input, logoKey.button, logoKey.input, musicKey.button, musicKey.input);
 
   const field = (text: string, value: string, apply: (value: string) => void) => {
     const label = element("label", "ag-field");
@@ -440,7 +494,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   transcriptLabel.append(transcriptName, transcriptInput);
   const spreadButton = iconButton("", labels.spread, ICONS.spread);
   transcript.append(transcriptLabel, spreadButton);
-  panel.append(looks, themeChoice, fields, captionsHead, cueList, transcript);
+  panel.append(looks, musicLevel, themeChoice, fields, captionsHead, cueList, transcript);
 
   const timeline = element("div", "ag-timeline");
   const openButton = iconButton("ag-open", labels.open, ICONS.open);
@@ -503,6 +557,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     overlay: overlay ?? undefined,
     backdrop,
     logo,
+    music: music ? { samples: music.samples, gain: musicVolume } : null,
     captions: paginate(parts.length ? stitchCues(cues, parts) : clip(cues, range[0], range[1]), pageLength(layout)),
     audio: !recording
       ? { samples: new Float32Array(1), sampleRate: 48000, start: 0, end: 0 }
@@ -544,6 +599,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     cover: coverSource,
     background: backdropSource,
     logo: logoSource,
+    music: musicSource,
+    musicVolume,
     layout,
     visual,
     theme: THEMES.includes(theme) ? THEMES.indexOf(theme) : theme,
@@ -678,6 +735,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     audio.currentTime = playhead;
     painter.reset();
     void audio.play();
+    if (music) {
+      musicAudio.currentTime = clipTime() % music.duration;
+      musicAudio.volume = musicVolume;
+      void musicAudio.play();
+    }
     playButton.replaceChildren(icon(ICONS.pause));
     playButton.setAttribute("aria-label", labels.pause);
     playButton.title = labels.pause;
@@ -686,6 +748,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   function stop() {
     audio.pause();
+    musicAudio.pause();
     cancelAnimationFrame(frame);
     playButton.replaceChildren(icon(ICONS.play));
     playButton.setAttribute("aria-label", labels.play);
@@ -695,7 +758,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   function seek(time: number) {
     playhead = Math.max(0, Math.min(recording?.duration ?? 0, time));
-    if (!audio.paused) audio.currentTime = playhead;
+    if (!audio.paused) {
+      audio.currentTime = playhead;
+      if (music) musicAudio.currentTime = clipTime() % music.duration;
+    }
     painter.reset();
     paint();
     placeTimeline();
@@ -1069,6 +1135,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     backgroundKey.mark(true);
     rebuild();
   });
+  if (options.music) void setMusic(options.music).then(() => musicKey.mark(true));
   if (options.logo) void loadImage(options.logo).then((image) => {
     logo = image;
     logoKey.mark(true);
