@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clipTimeAt, partsLength, readClip, recordingTimeAt, stitch, stitchCues } from "../dist/parts.js";
+import { clipTimeAt, partsLength, readClip, readReel, recordingTimeAt, stitch, stitchCues } from "../dist/parts.js";
 
 const close = (actual, expected, tolerance = 1e-6) => assert.ok(Math.abs(actual - expected) <= tolerance, `${actual} ≉ ${expected}`);
 
@@ -82,4 +82,72 @@ test("only the parts under the window are read, and only as much of them as it c
   assert.equal(calls.length, 1);
   close(calls[0][0], 11);
   close(calls[0][1], 12);
+});
+
+test("the halves of a split play on into each other, and only a real join fades", () => {
+  const rate = 100;
+  const samples = new Float32Array(1000).fill(1);
+  assert.deepEqual([...stitch(samples, rate, [[1, 3], [3, 4]], 0.1)], [...samples.subarray(100, 400)]);
+  const out = stitch(samples, rate, [[1, 3], [3, 4], [6, 7]], 0.1);
+  close(out[199], 1);
+  close(out[200], 1);
+  assert.ok(out[299] < 0.2, "the split clip fades out where the next part was cut from elsewhere");
+  assert.ok(out[300] < 0.2, "and the next part fades in");
+});
+
+test("a window of a clip with a split in it reads the same sound as the whole clip", async () => {
+  const rate = 100;
+  const samples = Float32Array.from({ length: 1000 }, (_, i) => Math.sin(i / 5) * 0.4 + 0.2);
+  const parts = [[1, 2.4], [2.4, 4], [6, 7]];
+  const whole = stitch(samples, rate, parts, 0.1);
+  for (const [from, to] of [[0, 4], [1.2, 1.6], [2.9, 3.4], [0.5, 2.7]]) {
+    const window = await readClip(recordingOf(samples), parts, from, to, rate, 0.1);
+    window.forEach((value, i) => close(value, whole[Math.round(from * rate) + i]));
+  }
+});
+
+test("recordings end to end read as one, each in its own time, silent where none is", async () => {
+  const rate = 100;
+  const first = [];
+  const second = [];
+  const reel = [
+    { offset: 0, duration: 2, read: recordingOf(new Float32Array(200).fill(0.25), first) },
+    { offset: 2, duration: 1, read: recordingOf(new Float32Array(100).fill(0.75), second) },
+    { offset: 4, duration: 1, read: recordingOf(new Float32Array(100).fill(0.5)) },
+  ];
+  const across = await readReel(reel, 1.5, 2.5, rate);
+  assert.equal(across.length, 100);
+  assert.ok(across.subarray(0, 50).every((value) => value === 0.25));
+  assert.ok(across.subarray(50).every((value) => value === 0.75));
+  close(first[0][0], 1.5);
+  close(first[0][1], 2);
+  close(second[0][0], 0);
+  close(second[0][1], 0.5);
+  const all = await readReel(reel, -0.5, 5.5, rate);
+  assert.equal(all.length, 600);
+  assert.ok(all.subarray(0, 50).every((value) => value === 0), "silence before the first");
+  assert.ok(all.subarray(50, 250).every((value) => value === 0.25));
+  assert.ok(all.subarray(250, 350).every((value) => value === 0.75));
+  assert.ok(all.subarray(350, 450).every((value) => value === 0), "silence in the gap");
+  assert.ok(all.subarray(450, 550).every((value) => value === 0.5));
+  assert.ok(all.subarray(550).every((value) => value === 0), "silence after the last");
+  assert.equal((await readReel(reel, 6, 7, rate)).length, 100);
+});
+
+test("a clip of parts from two recordings sounds the same as the recordings joined into one file", async () => {
+  const rate = 100;
+  const one = Float32Array.from({ length: 300 }, (_, i) => Math.sin(i / 6) * 0.5);
+  const two = Float32Array.from({ length: 200 }, (_, i) => Math.cos(i / 4) * 0.3 + 0.1);
+  const both = new Float32Array(500);
+  both.set(one);
+  both.set(two, 300);
+  const reel = [{ offset: 0, duration: 3, read: recordingOf(one) }, { offset: 3, duration: 2, read: recordingOf(two) }];
+  const read = (start, end, sampleRate) => readReel(reel, start, end, sampleRate);
+  const parts = [[1, 3], [3, 4.5], [0.5, 1]];
+  const whole = stitch(both, rate, parts, 0.1);
+  assert.equal(whole.length, 400);
+  for (const [from, to] of [[0, 4], [1.5, 2.5], [1.9, 2.1], [3.2, 4]]) {
+    const window = await readClip(read, parts, from, to, rate, 0.1);
+    window.forEach((value, i) => close(value, whole[Math.round(from * rate) + i]));
+  }
 });

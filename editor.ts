@@ -1,14 +1,17 @@
 import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, spread, toSRT, type Cue } from "./captions.js";
 import { exportClip, type ExportResult } from "./export.js";
-import { clipTimeAt, partsLength, readClip, stitchCues } from "./parts.js";
+import { clipTimeAt, partsLength, readClip, readReel, stitchCues, type Reel } from "./parts.js";
 import { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
 import { Painter, SIZES, THEMES, type Layout, type Overlay, type Page, type Scene, type Theme, type Visual } from "./render.js";
 import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
 import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
+import { colourPanel, COLOUR_LABELS, documentColours, hexToHsv, markPicked, type ColourChoice } from "./colour.js";
 import { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
-import { defaultLayers, moveLayer, type Art, type Layer, type LayerKind, type ShapeKind } from "./layers.js";
+import { backgroundOf, defaultLayers, entranceLength, isBackgroundLayer, moveLayer, showCaptions, stacked, widthAnchored, type Layer, type LayerKind } from "./layers.js";
 import { createStage, type FontChoice, type StageLabels } from "./stage.js";
-import { textHeight } from "./render.js";
+import { textHeight, textWidth } from "./render.js";
+import { elementTiles, searchTiles, SECTIONS, type ElementTile, type SectionId } from "./elements.js";
+import { DEVICES } from "./paint-mockup.js";
 
 export type Tab = "design" | "elements" | "text" | "photos" | "music" | "captions" | "layers";
 
@@ -37,11 +40,20 @@ export interface Labels {
   fit: string;
   whole: string;
   reading: (done: string, total: string) => string;
-  addPart: string;
-  addPartHint: string;
+  addRecording: string;
+  addRecordingHint: string;
+  /** Over the picture while another recording is read in, with its name. */
+  adding: (name: string) => string;
+  added: (name: string, part: number) => string;
+  addFailed: string;
+  /** A recording opened without a file name, by its place on the clip. */
+  recording: (index: number) => string;
+  split: string;
+  splitHint: string;
   partsFull: string;
   parts: string;
-  part: (index: number, from: string, to: string) => string;
+  /** A part's chip, read out: the recording it comes from when the clip has several, and its times in that recording. */
+  part: (index: number, name: string, from: string, to: string) => string;
   removePart: (index: number) => string;
   tabs: Record<Tab, string>;
   shape: string;
@@ -93,23 +105,32 @@ export interface Labels {
   templates: string;
   templateNames: Record<TemplateId, string>;
   pageColour: string;
-  pageNames: string[];
-  gradientNames: string[];
-  themePage: string;
   shapes: string;
   shapeNames: { square: string; rounded: string; circle: string; line: string; triangle: string; diamond: string; star: string; heart: string; arrow: string; bubble: string; pentagon: string; hexagon: string; octagon: string; cross: string; parallelogram: string; arch: string };
-  stickers: string;
-  addSticker: (sticker: string) => string;
   searchElements: string;
-  graphics: string;
   lines: string;
   lineNames: { line: string; dashed: string; arrow: string; double: string };
   frames: string;
   grids: string;
   gridNames: { across: string; down: string; three: string; four: string };
-  showMore: string;
   nothingFound: string;
-  addGraphic: (name: string) => string;
+  sectionNames: Record<SectionId | "recent" | "photos", string>;
+  seeAll: string;
+  seeAllOf: (section: string) => string;
+  backToElements: string;
+  addElement: (name: string) => string;
+  uploadVideo: string;
+  addedUnder: (name: string) => string;
+  dropPhoto: string;
+  captionsSample: string;
+  wordSamples: { title: string; name: string; handle: string };
+  frameFilled: string;
+  startOver: string;
+  startOverTitle: string;
+  startOverText: string;
+  startOverConfirm: string;
+  cancel: string;
+  startedOver: string;
   fontCombos: string;
   details: string;
   stockPhotos: string;
@@ -140,7 +161,7 @@ export interface Labels {
   layersHelp: string;
   fitPage: string;
   zoomLevel: (percent: number) => string;
-  layerNames: Record<"avatar" | "name" | "handle" | "title" | "visual" | "time" | "captions" | "links" | "image" | "video" | "shape" | "graphic", string>;
+  layerNames: Record<Exclude<LayerKind, "text">, string>;
   textLayer: (words: string) => string;
   showLayer: (name: string) => string;
   hideLayer: (name: string) => string;
@@ -152,15 +173,6 @@ export interface TemplateChoice {
   id: string;
   name: string;
   make(layout: Layout): Template;
-}
-
-/** A drawing in a library of graphics or stickers. */
-export interface LibraryItem {
-  id: string;
-  set: string;
-  name: string;
-  tags?: string;
-  art: Art;
 }
 
 /** A photo the page offers, by address, with its small version for the panel. */
@@ -175,10 +187,8 @@ export interface StockPhoto {
   credit?: string;
 }
 
-/** Graphics, stickers and photos a page offers for the picture. */
+/** Free photos a page offers for the picture. */
 export interface Library {
-  graphics?: LibraryItem[];
-  stickers?: LibraryItem[];
   photos?: StockPhoto[];
 }
 
@@ -214,8 +224,10 @@ export interface EditorOptions {
   page?: Page | null;
   /** More designs to start from, after the editor's own. */
   templates?: TemplateChoice[];
-  /** Graphics, stickers and photos to offer in the panels. */
+  /** Free photos to offer in the panels. */
   library?: Library;
+  /** The Elements a user added last time, newest first, as Settings.recent gave them. */
+  recent?: string[];
   font?: string;
   labels?: Partial<Labels>;
   /** Called with the finished video. Without it, the video downloads. */
@@ -224,8 +236,10 @@ export interface EditorOptions {
   overlay?: Overlay;
   /** Stretches of the recording, [start, end] in seconds, played one after another as the clip. */
   parts?: Array<[number, number]>;
-  /** Called after the parts change through the editor: added, removed or reordered. */
+  /** Called after the parts change through the editor: added, removed, reordered, split or trimmed. */
   onParts?: (parts: Array<[number, number]>) => void;
+  /** Called after another recording is added to the clip, with every recording on it in order. */
+  onRecordings?: (recordings: Array<{ source: string | Blob; name: string; start: number; end: number }>) => void;
   /** Called after the look changes through the editor, at most once a frame. */
   onChange?: (settings: Settings) => void;
   /** The frame laid out as layers, for each shape that has been changed from the classic layout. */
@@ -260,15 +274,25 @@ export interface Settings {
   images: Record<string, Blob | string>;
   /** The page's own colour or gradient; null for the theme's. */
   page: Page | null;
+  /** The Elements added lately, newest first, for Recently used. */
+  recent: string[];
 }
 
 export interface Editor {
   readonly element: HTMLElement;
   readonly captions: Cue[];
   readonly range: [number, number];
-  /** The open recording's length in seconds; 0 before one is open. */
+  /**
+   * How long the recordings last together, in seconds; 0 before one is open. Every time the editor gives or takes is
+   * on this timeline: the recordings end to end, in the order they were added.
+   */
   readonly duration: number;
+  /** Opens a recording in place of every one on the clip. */
   load(audio: string | Blob): Promise<void>;
+  /** Adds a recording after the ones on the timeline, as a part of the clip of its own; the clip so far stays as it is. */
+  addRecording(audio: string | Blob): Promise<void>;
+  /** The recordings on the timeline, in order: each as it was opened or given, its name, and where it starts and ends. */
+  readonly recordings: Array<{ source: string | Blob; name: string; start: number; end: number }>;
   setCaptions(cues: Cue[]): void;
   setRange(start: number, end: number): void;
   play(): void;
@@ -278,9 +302,9 @@ export interface Editor {
   /** The parts the clip is made of, in order; empty when the clip is just the selected stretch. */
   readonly parts: Array<[number, number]>;
   setParts(parts: Array<[number, number]>): void;
-  /** The recording on show, as it was opened or given; null before one is. */
+  /** The first recording on the timeline, as it was opened or given; null before one is. */
   readonly source: string | Blob | null;
-  /** One channel of the open recording from `start` to `end` seconds at `sampleRate`, read from the file as needed. */
+  /** One channel of the timeline from `start` to `end` seconds at `sampleRate`, read from the files as needed. */
   readAudio(start: number, end: number, sampleRate: number): Promise<Float32Array>;
   setOverlay(overlay: Overlay | null): void;
   /** Opens one of the tools, as pressing its tab does. */
@@ -323,16 +347,22 @@ const DEFAULT_LABELS: Labels = {
   fit: "Fit",
   whole: "Show the whole recording",
   reading: (done, total) => `Loading waveform · ${done} of ${total}`,
-  addPart: "Add to clip",
-  addPartHint: "Keep this moment in the clip, then select another. They play back to back.",
+  addRecording: "Add recording",
+  addRecordingHint: "Add another recording from your computer. It plays after what is in the clip now.",
+  adding: (name) => `Adding ${name}`,
+  added: (name, part) => `${name} is in the clip as part ${part}.`,
+  addFailed: "This recording couldn't be added. Save it as an MP3 or WAV and try again.",
+  recording: (index) => `Recording ${index}`,
+  split: "Split",
+  splitHint: "Cut the clip in two at the playhead, then trim or move each half",
   partsFull: "The clip is already as long as it can be.",
   parts: "Parts of the clip, in order",
-  part: (index, from, to) => `Part ${index}, ${from} to ${to}`,
+  part: (index, name, from, to) => (name ? `Part ${index}, ${name}, ${from} to ${to}` : `Part ${index}, ${from} to ${to}`),
   removePart: (index) => `Remove part ${index}`,
   tabs: { design: "Design", elements: "Elements", text: "Text", photos: "Photos", music: "Music", captions: "Captions", layers: "Layers" },
   shape: "Shape",
   layouts: { square: "Square", portrait: "Portrait", story: "Story", landscape: "Wide" },
-  visual: "Animation",
+  visual: "Sound style",
   visuals: { bars: "Bars", wave: "Wave", pulse: "Pulse" },
   colours: "Colours",
   theme: (name) => `${name} colours`,
@@ -406,15 +436,13 @@ const DEFAULT_LABELS: Labels = {
     height: "Height",
     rotation: "Turn, in degrees",
     straighten: "Straighten",
-    themeColours: "Theme",
-    colours: "Colours",
-    custom: "Custom colour",
-    themeColour: (name) => (name === "accent" ? "Theme accent" : name === "muted" ? "Theme soft text" : "Theme text"),
-    paletteNames: ["White", "Black", "Red", "Orange", "Yellow", "Green", "Mint", "Blue", "Indigo", "Purple", "Pink", "Grey"],
+    colourPicker: COLOUR_LABELS,
+    back: "Back",
+    borderColour: "Border colour",
     options: (layer) => `${layer} options`,
     typing: (layer) => `Edit ${layer}`,
     selected: (layer) => `${layer} selected`,
-    hidden: (layer) => `${layer} hidden. Show it again from Layers`,
+    hidden: (layer) => `${layer} taken off the picture`,
     deleted: (layer) => `${layer} deleted. Add it back from Elements, or undo`,
     duplicated: (layer) => `${layer} duplicated`,
     effects: "Effects",
@@ -424,8 +452,11 @@ const DEFAULT_LABELS: Labels = {
     capitals: "Capitals",
     none: "None",
     animate: "Animate",
-    enterNames: { fade: "Fade", rise: "Rise", pan: "Pan", slide: "Slide", pop: "Pop", wipe: "Wipe", blur: "Blur", zoom: "Zoom", breathe: "Breathe", baseline: "Baseline", drift: "Drift", tumble: "Tumble", stomp: "Stomp", bounce: "Bounce", flicker: "Flicker", typewriter: "Typewriter" },
-    timing: "Shown",
+    enterNames: {
+      fade: "Fade", rise: "Rise", pan: "Pan", slide: "Slide", pop: "Pop", wipe: "Wipe", blur: "Blur", zoom: "Zoom", breathe: "Breathe", baseline: "Baseline", drift: "Drift", tumble: "Tumble", stomp: "Stomp", bounce: "Bounce", flicker: "Flicker", typewriter: "Typewriter",
+      ascend: "Ascend", shift: "Shift", merge: "Merge", burst: "Burst", cascade: "Cascade", spread: "Spread", block: "Block", clarify: "Clarify", glide: "Glide", roll: "Roll", skate: "Skate", elastic: "Elastic", flip: "Flip", unfold: "Unfold", iris: "Iris", curtain: "Curtain", fall: "Fall", tectonic: "Tectonic", scrapbook: "Scrapbook", shine: "Shine", grow: "Grow",
+    },
+    timing: "When it shows",
     showFrom: "From",
     showUntil: "Until",
     playhead: "Playhead",
@@ -487,41 +518,107 @@ const DEFAULT_LABELS: Labels = {
     zoom: "Zoom",
     resetCrop: "Reset crop",
     frame: "Frame",
-    frameNames: { none: "None", rect: "Square", ellipse: "Circle", triangle: "Triangle", star: "Star", heart: "Heart", arrow: "Arrow", diamond: "Diamond", bubble: "Speech", pentagon: "Pentagon", hexagon: "Hexagon", octagon: "Octagon", cross: "Cross", parallelogram: "Slant", arch: "Arch", line: "Line" },
+    frameNames: { none: "None", rect: "Square", ellipse: "Circle", triangle: "Triangle", star: "Star", heart: "Heart", arrow: "Arrow", diamond: "Diamond", bubble: "Speech", pentagon: "Pentagon", hexagon: "Hexagon", octagon: "Octagon", cross: "Cross", parallelogram: "Slant", arch: "Arch", line: "Line", burst: "Burst", sparkle: "Sparkle", squircle: "Squircle", blob: "Blob", ring: "Ring", quote: "Quote", banner: "Banner", tag: "Tag", chevron: "Chevron", cloud: "Cloud", moon: "Moon", check: "Tick" },
     filters: "Filters",
     filterNames: { vivid: "Vivid", warm: "Warm", cool: "Cool", fade: "Faded", retro: "Retro", dramatic: "Dramatic", mono: "Mono", noir: "Noir" },
     original: "Original",
-    in: "Way in",
-    out: "Way out",
-    loopName: "While it shows",
-    loopNames: { pulse: "Pulse", wiggle: "Wiggle", rotate: "Spin", float: "Float" },
+    in: "In",
+    out: "Out",
+    loopName: "Loop",
+    preview: "Preview",
+    noAnimation: "No animation yet",
+    recommended: "Recommended",
+    basic: "Basic",
+    exaggerated: "Lively",
+    words: "Word by word",
+    emphasis: "While it shows",
+    direction: "Direction",
+    directionNames: { up: "Up", down: "Down", left: "Left", right: "Right" },
+    loopNames: { pulse: "Pulse", wiggle: "Wiggle", rotate: "Spin", float: "Float", sway: "Sway", heartbeat: "Heartbeat", shimmer: "Shimmer", flash: "Flash", slowZoom: "Slow zoom" },
     speed: "Speed",
     selection: (count) => `${count} parts`,
     grouped: (count) => `${count} parts grouped`,
     ungrouped: "Group taken apart",
+    showAgain: "Show again",
+    backgroundSet: "Background set. It stays behind everything else",
+    backgroundPanelsHidden: "Background set. The panel that covered it is hidden; show it again from Layers",
+    detachBackground: "Detach from background",
+    fitText: "Fit box to text",
+    chartType: "Chart",
+    chartNames: { column: "Columns", bar: "Bars", line: "Line", area: "Area", pie: "Pie", donut: "Donut", ring: "Ring", progress: "Progress", number: "Big number", poll: "Poll" },
+    data: "Data",
+    label: "Label",
+    value: "Value",
+    addRow: "Add a row",
+    removeRow: (row) => `Remove row ${row}`,
+    pasteRows: "Paste from a spreadsheet",
+    pasteHint: "One row a line: a label, then a tab or a comma, then the number",
+    pasteCellsHint: "One row a line, its cells split by tabs or commas",
+    chartOptions: "Options",
+    showLabels: "Labels",
+    showValues: "Values",
+    showGrid: "Guide lines",
+    prefix: "Before each value",
+    suffix: "After each value",
+    outOf: "Out of",
+    wordsColour: "Words",
+    table: "Table",
+    cells: "Cells",
+    cell: (row, column) => `Row ${row}, column ${column}`,
+    addColumn: "Add a column",
+    removeColumn: "Remove a column",
+    removeLastRow: "Remove a row",
+    headerRow: "Header row",
+    stripes: "Stripes",
+    rules: "Lines between",
+    ruleNames: { none: "None", rows: "Rows", grid: "Every cell" },
+    device: "Device",
+    deviceNames: { phone: "Phone", tablet: "Tablet", laptop: "Laptop", monitor: "Monitor", tv: "TV", browser: "Browser", polaroid: "Polaroid", vinyl: "Vinyl" },
+    caption: "Caption",
+    addPhoto: "Add photo",
+    form: "Form",
+    solidNames: { sphere: "Sphere", cube: "Cube", cylinder: "Cylinder", cone: "Cone", torus: "Ring", pyramid: "Pyramid", capsule: "Capsule" },
+    gloss: "Shine",
+    groundShadow: "Shadow under it",
+    ambientStyle: "Style",
+    ambientNames: { aurora: "Aurora", flow: "Flow", bokeh: "Bokeh", particles: "Particles", waves: "Waves", rays: "Light rays", grid: "Grid", grain: "Film grain" },
+    ground: "Ground",
+    light: "Light",
+    secondLight: "Second light",
+    pace: "Pace",
+    withVoice: "Moves with the voice",
   },
   undo: "Undo",
   redo: "Redo",
   templates: "Start from",
   templateNames: { blank: "Blank page", card: "Audiogram card", captions: "Big captions" },
   pageColour: "Page colour",
-  pageNames: ["White", "Cream", "Black", "Sky", "Mint", "Rose", "Butter", "Lilac"],
-  gradientNames: ["Sunrise", "Lagoon", "Deep sea", "Lime", "Peach", "Dusk"],
-  themePage: "The theme's colours",
   shapes: "Shapes",
   shapeNames: { square: "Square", rounded: "Rounded", circle: "Circle", line: "Bar", triangle: "Triangle", diamond: "Diamond", star: "Star", heart: "Heart", arrow: "Arrow", bubble: "Speech", pentagon: "Pentagon", hexagon: "Hexagon", octagon: "Octagon", cross: "Cross", parallelogram: "Slant", arch: "Arch" },
-  stickers: "Stickers",
-  addSticker: (sticker) => `Add ${sticker}`,
-  searchElements: "Search graphics and stickers",
-  graphics: "Graphics",
+  searchElements: "Search elements",
   lines: "Lines",
   lineNames: { line: "Line", dashed: "Dashed", arrow: "Arrow", double: "Both ends" },
   frames: "Photo frames",
   grids: "Photo grids",
   gridNames: { across: "Two across", down: "Two down", three: "Three across", four: "Four" },
-  showMore: "Show more",
   nothingFound: "Nothing matches that. Try a shorter word.",
-  addGraphic: (name) => `Add ${name}`,
+  sectionNames: { recent: "Recently used", audio: "Sound and captions", shapes: "Shapes", lines: "Lines", frames: "Photo frames", grids: "Photo grids", photos: "Photos", videos: "Moving backgrounds", charts: "Charts", tables: "Tables", mockups: "Mockups", solids: "3D shapes" },
+  seeAll: "See all",
+  seeAllOf: (section) => `See all ${section.toLowerCase()}`,
+  backToElements: "All elements",
+  addElement: (name) => `Add ${name}`,
+  uploadVideo: "Upload a video",
+  addedUnder: (name) => `${name} added behind everything`,
+  dropPhoto: "Drop a photo",
+  captionsSample: "Captions show here",
+  wordSamples: { title: "Your episode title", name: "Your name", handle: "@yourhandle" },
+  frameFilled: "Photo added to the frame",
+  startOver: "Start over",
+  startOverTitle: "Start over?",
+  startOverText: "This clears the design on every shape: its layers, page colour and background, and the title, name and handle. Your recording, captions, music, profile picture, links and uploads stay, and Undo brings the design back.",
+  startOverConfirm: "Clear the design",
+  cancel: "Cancel",
+  startedOver: "Started again on a blank page. Undo brings your design back.",
   fontCombos: "Font pairs",
   details: "The show and the speaker",
   stockPhotos: "Free photos",
@@ -552,7 +649,7 @@ const DEFAULT_LABELS: Labels = {
   fitPage: "Fit the page",
   zoomLevel: (percent) => `Zoom ${percent}%`,
   layersHelp: "Top of the picture first. Press a name to select it; hidden parts can be shown again here.",
-  layerNames: { avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", visual: "Animation", time: "Clip time", captions: "Captions", links: "Links", image: "Picture", video: "Video", shape: "Shape", graphic: "Graphic" },
+  layerNames: { avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", visual: "Sound", time: "Clip time", captions: "Captions", links: "Links", image: "Picture", video: "Video", shape: "Shape", graphic: "Graphic", chart: "Chart", table: "Table", mockup: "Mockup", solid: "3D shape", ambient: "Moving background" },
   textLayer: (words) => `Text: ${words}`,
   showLayer: (name) => `Show ${name}`,
   hideLayer: (name) => `Hide ${name}`,
@@ -568,16 +665,6 @@ const PICTURE_LIMIT = 20 * 1024 * 1024;
 const VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
 const VIDEO_LIMIT = 200 * 1024 * 1024;
 const isVideo = (source: Blob | string) => (typeof source === "string" ? /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(source) : source.type.startsWith("video/"));
-const PAGE_COLOURS = ["#ffffff", "#f4efe6", "#111111", "#dbeafe", "#dcfce7", "#ffe4e6", "#fef3c7", "#ede9fe"];
-const GRADIENTS: Page[] = [
-  { color: "#ff9a8b", to: "#ffd86f", angle: 135 },
-  { color: "#4facfe", to: "#00f2fe", angle: 135 },
-  { color: "#0f2027", to: "#2c5364", angle: 180 },
-  { color: "#a8ff78", to: "#78ffd6", angle: 135 },
-  { color: "#f6d365", to: "#fda085", angle: 160 },
-  { color: "#2b1055", to: "#7597de", angle: 180 },
-];
-const STICKERS = ["🔥", "⭐", "❤️", "😂", "🎉", "👏", "💡", "🚀", "✅", "❗", "❓", "💯", "🎙️", "🎧", "📈", "💰", "👀", "🙌", "😍", "🤯", "⚡", "📌", "👉", "🧠"];
 const LAYOUTS: Layout[] = ["square", "portrait", "story", "landscape"];
 const RATIOS: Record<Layout, string> = { square: "1:1", portrait: "4:5", story: "9:16", landscape: "16:9" };
 
@@ -632,12 +719,45 @@ async function loadImage(source: string | Blob): Promise<HTMLImageElement> {
   return image;
 }
 
+/** A recording on the clip's timeline: its sound, what was opened, its name, where it starts, and its own player. */
+interface Recording {
+  source: AudioSource;
+  input: string | Blob;
+  name: string;
+  offset: number;
+  player: HTMLAudioElement;
+}
+
+function playerOf(url: string): HTMLAudioElement {
+  const player = new Audio();
+  player.preload = "auto";
+  player.src = url;
+  return player;
+}
+
+/** Lets go of a recording: its player stops and drops the file, and the file stops being read. */
+function closeRecording({ source, player }: Recording) {
+  player.pause();
+  player.removeAttribute("src");
+  player.load();
+  source.close();
+}
+
+/** A caption moved `by` seconds along, its words with it. */
+const shiftCue = (cue: Cue, by: number): Cue => ({
+  ...cue,
+  start: cue.start + by,
+  end: cue.end + by,
+  ...(cue.words ? { words: cue.words.map((word) => ({ ...word, start: word.start + by, end: word.end + by })) } : {}),
+});
+
 export function audiogram(container: HTMLElement, options: EditorOptions = {}): Editor {
   const labels: Labels = { ...DEFAULT_LABELS, ...options.labels };
   const maxLength = options.maxLength ?? Infinity;
   const id = `ag${++instances}`;
-  let source: AudioSource | null = null;
-  let sourceInput: string | Blob | null = null;
+  // The recordings end to end on one timeline. The parts, the selection, the playhead and the captions are all times
+  // along it, so a clip can take its parts from any of them.
+  let recordings: Recording[] = [];
   // Bumped for each recording, so the clip's sound read from one is never taken for another's.
   let generation = 0;
   let cues: Cue[] = [...(options.captions ?? [])].sort((a, b) => a.start - b.start);
@@ -656,8 +776,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let handle = options.handle ?? "";
   let cover: HTMLImageElement | null = null;
   let coverSource: Blob | string | null = options.cover ?? null;
-  let backdrop: HTMLImageElement | null = null;
-  let backdropSource: Blob | string | null = options.background ?? null;
+  // The key of the background the Photos row shows, so it is only redrawn when the design's background changes.
+  let rowBackground: string | null | undefined;
   let logo: HTMLImageElement | null = null;
   const logoSource: Blob | string | null = options.logo ?? null;
   let music: { samples: Float32Array; url: string; duration: number; close(): void } | null = null;
@@ -667,10 +787,26 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let overlay: Overlay | null = options.overlay ?? null;
   // The clip is the parts, back to back, when there are any; otherwise the selected stretch alone.
   let parts: Array<[number, number]> = (options.parts ?? []).map(([start, end]) => [start, end]);
+  // The part the selection edits, while the clip has parts.
+  let active = 0;
+  // Whether another recording is being read in.
+  let adding = false;
   const spans = (): Array<[number, number]> => (parts.length ? parts : [range]);
   const clipLength = () => (parts.length ? partsLength(parts) : range[1] - range[0]);
   const clipTime = () => (parts.length ? clipTimeAt(parts, playhead) ?? 0 : playhead - range[0]);
-  const duration = () => source?.duration ?? 0;
+  const duration = () => {
+    const last = recordings.at(-1);
+    return last ? last.offset + last.source.duration : 0;
+  };
+  /** The recording `time` falls in; a join belongs to the recording that starts there. */
+  const recordingAt = (time: number) => {
+    let index = 0;
+    while (index < recordings.length - 1 && time >= recordings[index + 1].offset) index++;
+    return index;
+  };
+  // A part never crosses from one recording into the next, so its middle says which one it is in.
+  const recordingOf = ([start, end]: readonly [number, number]) => recordingAt((start + end) / 2);
+  const boundsOf = (index: number): [number, number] => [recordings[index].offset, recordings[index].offset + recordings[index].source.duration];
   // The playhead stays inside the clip: on one of the parts, or in the selected stretch when there are none.
   const intoClip = (time: number) => {
     let nearest = time;
@@ -719,7 +855,28 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   exportButton.append(meter);
   const undoButton = keyButton("ag-undo", labels.undo, ICONS.undo);
   const redoButton = keyButton("ag-redo", labels.redo, ICONS.redo);
-  header.append(openButton, audioInput, headerSlot, element("span", "ag-grow"), undoButton, redoButton, actionsSlot, exportButton);
+  const startOverButton = keyButton("ag-start-over", labels.startOver, ICONS.reset);
+  startOverButton.setAttribute("aria-haspopup", "dialog");
+  startOverButton.setAttribute("aria-expanded", "false");
+  header.append(openButton, audioInput, headerSlot, element("span", "ag-grow"), undoButton, redoButton, startOverButton, actionsSlot, exportButton);
+  // Start over asks first, in a small panel under its key: what goes, what stays, and that Undo brings it back.
+  const startOverPanel = element("div", "ag-download ag-confirm");
+  startOverPanel.setAttribute("role", "alertdialog");
+  startOverPanel.hidden = true;
+  const startOverTitle = element("h2", "ag-download-title");
+  startOverTitle.id = `${id}-start-over`;
+  startOverTitle.textContent = labels.startOverTitle;
+  startOverPanel.setAttribute("aria-labelledby", startOverTitle.id);
+  const startOverText = element("p", "ag-help");
+  startOverText.id = `${id}-start-over-text`;
+  startOverPanel.setAttribute("aria-describedby", startOverText.id);
+  startOverText.textContent = labels.startOverText;
+  const startOverKeys = element("div", "ag-confirm-keys");
+  const cancelStart = keyButton("", labels.cancel, ICONS.remove);
+  const confirmStart = keyButton("ag-danger", labels.startOverConfirm, ICONS.reset);
+  startOverKeys.append(cancelStart, confirmStart);
+  startOverPanel.append(startOverTitle, startOverText, startOverKeys);
+  header.append(startOverPanel);
   exportButton.setAttribute("aria-haspopup", "dialog");
   exportButton.setAttribute("aria-expanded", "false");
   // Download: what to make and how, then the key that makes it. The choices stay for the next download.
@@ -892,6 +1049,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     changed();
   });
   themeTiles.classList.add("ag-swatches");
+  heading(panes.design, labels.pageColour);
+  const pageSwatches = element("div", "ag-page-swatches");
+  panes.design.append(pageSwatches);
   heading(panes.design, labels.templates);
   const templateTiles = element("div", "ag-tiles");
   templateTiles.style.setProperty("--ag-count", "3");
@@ -909,133 +1069,14 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const moreHeading = heading(panes.design, labels.moreTemplates);
   const templateGrid = element("div", "ag-template-grid");
   panes.design.append(templateGrid);
-  heading(panes.design, labels.pageColour);
-  const pageSwatches = element("div", "ag-page-swatches");
-  panes.design.append(pageSwatches);
 
   const elementSearch = element("input", "ag-input ag-search");
   elementSearch.type = "search";
   elementSearch.placeholder = labels.searchElements;
   elementSearch.setAttribute("aria-label", labels.searchElements);
   elementSearch.autocomplete = "off";
-  panes.elements.append(elementSearch);
-  heading(panes.elements, labels.soundAndCaptions);
-  const soundTiles = element("div", "ag-tiles");
-  soundTiles.style.setProperty("--ag-count", "4");
-  const soundKinds: Array<{ name: string; markup: string; kind: LayerKind; look?: Visual }> = [
-    { name: labels.elementNames.captions, markup: ICONS.captions, kind: "captions" },
-    { name: labels.elementNames.bars, markup: ICONS.bars, kind: "visual", look: "bars" },
-    { name: labels.elementNames.wave, markup: ICONS.wave, kind: "visual", look: "wave" },
-    { name: labels.elementNames.pulse, markup: ICONS.pulse, kind: "visual", look: "pulse" },
-    { name: labels.elementNames.time, markup: ICONS.clock, kind: "time" },
-    { name: labels.elementNames.avatar, markup: ICONS.avatar, kind: "avatar" },
-    { name: labels.elementNames.name, markup: ICONS.name, kind: "name" },
-    { name: labels.elementNames.handle, markup: ICONS.handle, kind: "handle" },
-    { name: labels.elementNames.title, markup: ICONS.heading, kind: "title" },
-    { name: labels.elementNames.links, markup: ICONS.link, kind: "links" },
-  ];
-  for (const item of soundKinds) {
-    const tile = element("button", "ag-tile");
-    tile.type = "button";
-    const text = element("span", "ag-tile-text");
-    text.textContent = item.name;
-    tile.append(icon(item.markup), text);
-    tile.addEventListener("click", () => addElement(item.kind, item.look));
-    soundTiles.append(tile);
-  }
-  panes.elements.append(soundTiles);
-
-  heading(panes.elements, labels.shapes);
-  const shapeTiles = element("div", "ag-tiles");
-  shapeTiles.style.setProperty("--ag-count", "5");
-  const shapeKinds = [
-    { name: labels.shapeNames.square, markup: ICONS.shapeSquare, make: (): Partial<Layer> => ({ shape: "rect", radius: 0 }) },
-    { name: labels.shapeNames.rounded, markup: ICONS.shapeRounded, make: (): Partial<Layer> => ({ shape: "rect", radius: 0.18 }) },
-    { name: labels.shapeNames.circle, markup: ICONS.shapeCircle, make: (): Partial<Layer> => ({ shape: "ellipse" }) },
-    { name: labels.shapeNames.triangle, markup: ICONS.shapeTriangle, make: (): Partial<Layer> => ({ shape: "triangle" }) },
-    { name: labels.shapeNames.diamond, markup: ICONS.shapeDiamond, make: (): Partial<Layer> => ({ shape: "diamond" }) },
-    { name: labels.shapeNames.star, markup: ICONS.shapeStar, make: (): Partial<Layer> => ({ shape: "star" }) },
-    { name: labels.shapeNames.heart, markup: ICONS.shapeHeart, make: (): Partial<Layer> => ({ shape: "heart" }) },
-    { name: labels.shapeNames.arrow, markup: ICONS.shapeArrow, make: (): Partial<Layer> => ({ shape: "arrow", wide: true } as Partial<Layer>) },
-    { name: labels.shapeNames.bubble, markup: ICONS.shapeBubble, make: (): Partial<Layer> => ({ shape: "bubble", wide: true } as Partial<Layer>) },
-    { name: labels.shapeNames.pentagon, markup: ICONS.shapePentagon, make: (): Partial<Layer> => ({ shape: "pentagon" }) },
-    { name: labels.shapeNames.hexagon, markup: ICONS.shapeHexagon, make: (): Partial<Layer> => ({ shape: "hexagon" }) },
-    { name: labels.shapeNames.octagon, markup: ICONS.shapeOctagon, make: (): Partial<Layer> => ({ shape: "octagon" }) },
-    { name: labels.shapeNames.cross, markup: ICONS.shapeCross, make: (): Partial<Layer> => ({ shape: "cross" }) },
-    { name: labels.shapeNames.parallelogram, markup: ICONS.shapeSlant, make: (): Partial<Layer> => ({ shape: "parallelogram", wide: true } as Partial<Layer>) },
-    { name: labels.shapeNames.arch, markup: ICONS.shapeArch, make: (): Partial<Layer> => ({ shape: "arch" }) },
-    { name: labels.shapeNames.line, markup: ICONS.shapeLine, make: (): Partial<Layer> => ({ shape: "rect", radius: 0.5, line: true } as Partial<Layer>) },
-  ];
-  for (const kind of shapeKinds) {
-    const tile = element("button", "ag-tile");
-    tile.type = "button";
-    const text = element("span", "ag-tile-text");
-    text.textContent = kind.name;
-    tile.append(icon(kind.markup), text);
-    tile.addEventListener("click", () => addShape(kind.make()));
-    shapeTiles.append(tile);
-  }
-  panes.elements.append(shapeTiles);
-
-  heading(panes.elements, labels.lines);
-  const lineTiles = element("div", "ag-tiles");
-  lineTiles.style.setProperty("--ag-count", "4");
-  for (const [name, markup, style] of [
-    [labels.lineNames.line, ICONS.shapeLine, {}],
-    [labels.lineNames.dashed, ICONS.lineDashed, { dash: "dashed" }],
-    [labels.lineNames.arrow, ICONS.arrowRight, { arrowEnd: true }],
-    [labels.lineNames.double, ICONS.arrowBoth, { arrowStart: true, arrowEnd: true }],
-  ] as Array<[string, string, Partial<Layer>]>) {
-    const tile = element("button", "ag-tile");
-    tile.type = "button";
-    const text = element("span", "ag-tile-text");
-    text.textContent = name;
-    tile.append(icon(markup), text);
-    tile.addEventListener("click", () => addShape({ shape: "line", strokeWidth: 8, fill: "text", line: true, wide: true, ...style }));
-    lineTiles.append(tile);
-  }
-  panes.elements.append(lineTiles);
-
-  heading(panes.elements, labels.frames);
-  const frameTiles = element("div", "ag-tiles");
-  frameTiles.style.setProperty("--ag-count", "4");
-  for (const [shape, markup, radius] of [["ellipse", ICONS.shapeCircle, 0], ["rect", ICONS.shapeRounded, 0.12], ["arch", ICONS.shapeArch, 0], ["heart", ICONS.shapeHeart, 0], ["star", ICONS.shapeStar, 0], ["hexagon", ICONS.shapeHexagon, 0], ["diamond", ICONS.shapeDiamond, 0], ["bubble", ICONS.shapeBubble, 0]] as Array<[ShapeKind, string, number]>) {
-    const tile = element("button", "ag-tile");
-    tile.type = "button";
-    const text = element("span", "ag-tile-text");
-    text.textContent = labels.stage.frameNames[shape];
-    tile.append(icon(markup), text);
-    tile.addEventListener("click", () => addFrame(shape, radius));
-    frameTiles.append(tile);
-  }
-  panes.elements.append(frameTiles);
-
-  heading(panes.elements, labels.grids);
-  const gridTiles = element("div", "ag-tiles");
-  gridTiles.style.setProperty("--ag-count", "4");
-  for (const [kind, markup] of [["across", ICONS.gridAcross], ["down", ICONS.gridDown], ["three", ICONS.gridThree], ["four", ICONS.gridFour]] as const) {
-    const tile = element("button", "ag-tile");
-    tile.type = "button";
-    const text = element("span", "ag-tile-text");
-    text.textContent = labels.gridNames[kind];
-    tile.append(icon(markup), text);
-    tile.addEventListener("click", () => addGrid(kind));
-    gridTiles.append(tile);
-  }
-  panes.elements.append(gridTiles);
-
-  const graphicsHeading = heading(panes.elements, labels.graphics);
-  const graphicsGrid = element("div", "ag-art-grid");
-  const graphicsMore = keyButton("ag-show-more", labels.showMore, ICONS.add);
-  panes.elements.append(graphicsGrid, graphicsMore);
-
-  heading(panes.elements, labels.stickers);
-  const stickerGrid = element("div", "ag-art-grid ag-sticker-grid");
-  const stickersMore = keyButton("ag-show-more", labels.showMore, ICONS.add);
-  const nothing = element("p", "ag-help");
-  nothing.textContent = labels.nothingFound;
-  nothing.hidden = true;
-  panes.elements.append(stickerGrid, stickersMore, nothing);
+  const elementsBody = element("div", "ag-elements");
+  panes.elements.append(elementSearch, elementsBody);
   for (const [index, button] of [...themeTiles.children].entries()) button.setAttribute("aria-label", labels.theme(THEMES[index].name));
 
   // Text: what the frame says, and up to three links.
@@ -1114,12 +1155,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       if (shown) URL.revokeObjectURL(shown);
       shown = null;
       thumb.replaceChildren();
-      if (file && kind !== "sound") {
+      if (file && kind !== "sound" && !isVideo(file)) {
         const image = element("img", "");
         image.alt = "";
         image.src = typeof file === "string" ? file : (shown = URL.createObjectURL(file));
         thumb.append(image);
-      } else thumb.append(icon(kind === "sound" ? ICONS.music : ICONS.photo));
+      } else thumb.append(icon(kind === "sound" ? ICONS.music : file ? ICONS.video : ICONS.photo));
       what.textContent = file ? (file instanceof File ? file.name : typeof file === "string" && !file.startsWith("data:") ? file.split("/").pop() || name : name) : labels.none;
       rename(choose, file ? labels.replace : labels.choose);
       remove.hidden = !file;
@@ -1151,12 +1192,34 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     rebuild();
     changed();
   });
-  const backgroundRow = fileRow(panes.photos, labels.background, "image/*", "wide", labels.pictureFailed, async (file) => {
-    backdrop = file ? await loadImage(file) : null;
-    backdropSource = file;
-    rebuild();
-    changed();
+  // A background belongs to the design it is set on: it is that design's bottom layer, so other designs and the
+  // templates keep their own, and Undo brings back the one a template replaced.
+  const backgroundRow = fileRow(panes.photos, labels.background, [...PICTURE_TYPES, ...VIDEO_TYPES].join(","), "wide", labels.pictureFailed, async (file) => {
+    // One background at a time: a new one takes the place of a picture, a video or a moving background before it.
+    const rest = layersFor(layout).filter((layer, index) => !layer.backdrop && !(index === 0 && isBackgroundLayer(layer)));
+    if (!file) return setLayers(rest, true);
+    const video = VIDEO_TYPES.includes(file.type);
+    if (!video && !PICTURE_TYPES.includes(file.type)) throw new Error("type");
+    if (file.size > (video ? VIDEO_LIMIT : PICTURE_LIMIT)) throw new Error("size");
+    const key = layerId("picture");
+    await keepPicture(file, key, true);
+    rowBackground = key;
+    setLayers([{ id: layerId(isVideo(file) ? "video" : "image"), kind: isVideo(file) ? "video" : "image", image: key, x: 0, y: 0, w: 1, h: 1, rotation: 0, opacity: 1, backdrop: true }, ...rest], true);
+    renderUploads();
+    if (isVideo(file)) syncVideos(clipTime(), !audio.paused);
   });
+  /** The picture or video behind the design on the page, as it was given. */
+  function backgroundSource(): Blob | string | null {
+    const key = backgroundOf(layersFor(layout))?.image;
+    return key ? pictures.get(key)?.source ?? null : null;
+  }
+  /** The Photos row follows the background of the design on the page. */
+  function showBackgroundRow() {
+    const key = backgroundOf(layersFor(layout))?.image ?? null;
+    if (key === rowBackground) return;
+    rowBackground = key;
+    backgroundRow.show(backgroundSource());
+  }
   heading(panes.photos, labels.uploads);
   const uploadButton = keyButton("ag-upload", labels.upload, ICONS.upload);
   const uploadInput = element("input", "ag-hidden");
@@ -1177,7 +1240,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // Another picture for a picture already on the frame.
   const replaceInput = element("input", "ag-hidden");
   replaceInput.type = "file";
-  replaceInput.accept = PICTURE_TYPES.join(",");
+  replaceInput.accept = [...PICTURE_TYPES, ...VIDEO_TYPES].join(",");
   replaceInput.tabIndex = -1;
   panes.photos.append(replaceInput);
   let replacing: string | null = null;
@@ -1275,9 +1338,15 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   zoomName.textContent = labels.zoom;
   zoomName.setAttribute("aria-hidden", "true");
   zoomKeys.append(zoomName, zoomOutButton, zoomInButton, wholeButton);
-  const addPartButton = keyButton("ag-add-part", labels.addPart, ICONS.addPart);
-  addPartButton.title = labels.addPartHint;
-  transport.append(playButton, clipClock, reading, element("span", "ag-grow"), zoomKeys, addPartButton);
+  const splitButton = keyButton("ag-split", labels.split, ICONS.split);
+  splitButton.title = labels.splitHint;
+  const addRecordingButton = keyButton("ag-add-recording", labels.addRecording, ICONS.addRecording);
+  addRecordingButton.title = labels.addRecordingHint;
+  const recordingInput = element("input", "ag-hidden");
+  recordingInput.type = "file";
+  recordingInput.accept = audioInput.accept;
+  recordingInput.tabIndex = -1;
+  transport.append(playButton, clipClock, reading, element("span", "ag-grow"), zoomKeys, splitButton, addRecordingButton, recordingInput);
 
   const map = element("div", "ag-map");
   map.setAttribute("role", "img");
@@ -1318,8 +1387,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   shell.append(header, body, timeline, partList, live);
   container.append(root);
 
-  const audio = new Audio();
-  audio.preload = "auto";
+  // The player of the recording being played; a silent one stands in until a recording is open.
+  let audio = new Audio();
+  let current = 0;
+  const reelTime = () => (recordings[current]?.offset ?? 0) + audio.currentTime;
 
   const announce = (message: string) => {
     live.textContent = "";
@@ -1327,15 +1398,38 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   };
   // A message on the picture for a few seconds, for what went wrong with something the user did.
   let noticeTimer = 0;
-  const tell = (message: string) => {
-    notice.textContent = message;
+  const tell = (message: string, action?: { label: string; run(): void }) => {
+    notice.replaceChildren(message);
+    if (action) {
+      const key = element("button", "ag-notice-key");
+      key.type = "button";
+      key.textContent = action.label;
+      key.addEventListener("click", () => {
+        action.run();
+        notice.hidden = true;
+        // The key goes with the notice; the picture takes the focus rather than the page.
+        if (!document.activeElement || document.activeElement === document.body || notice.contains(document.activeElement)) stage.focus();
+      });
+      notice.append(" ", key);
+    }
     notice.hidden = false;
-    announce(message);
-    clearTimeout(noticeTimer);
-    noticeTimer = window.setTimeout(() => (notice.hidden = true), 7000);
+    announce(action ? `${message}. ${action.label} is on the picture.` : message);
+    noticeLength = action ? 9000 : 7000;
+    holdNotice(false);
   };
+  // A notice stays while it is pointed at or has focus, and goes a few seconds after it is let go.
+  let noticeLength = 7000;
+  const holdNotice = (held: boolean) => {
+    clearTimeout(noticeTimer);
+    if (!held && !notice.hidden) noticeTimer = window.setTimeout(() => (notice.hidden = true), noticeLength);
+  };
+  notice.addEventListener("pointerenter", () => holdNotice(true));
+  notice.addEventListener("pointerleave", () => holdNotice(false));
+  notice.addEventListener("focusin", () => holdNotice(true));
+  notice.addEventListener("focusout", () => holdNotice(false));
 
   function selectTab(next: Tab) {
+    if (next === "elements" && tab !== next && built) renderElements();
     tab = next;
     root.dataset.tab = next;
     tabButtons.forEach((button, index) => {
@@ -1355,12 +1449,15 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let windowPending: { key: string; from: number } | null = null;
   const clipKey = () => `${generation}|${spans().map(([start, end]) => `${start.toFixed(3)}-${end.toFixed(3)}`).join(",")}`;
 
-  /** The clip's sound from `from` to `to` seconds into it, read from the recording's parts as they stand now. */
+  /** The recordings as they stand now, end to end, to read any stretch of the timeline from. */
+  const reel = (): Reel => recordings.map(({ source, offset }) => ({ offset, duration: source.duration, read: (start, end, rate) => source.read(start, end, rate) }));
+
+  /** The clip's sound from `from` to `to` seconds into it, read from the recordings' parts as they stand now. */
   function clipReader(): (from: number, to: number) => Promise<Float32Array> {
-    const recording = source;
+    const shown = reel();
     const list = spans().map(([start, end]) => [start, end] as const);
-    if (!recording) return async (from, to) => new Float32Array(Math.max(0, Math.round((to - from) * SAMPLE_RATE)));
-    return (from, to) => readClip((start, end, rate) => recording.read(start, end, rate), list, from, to, SAMPLE_RATE);
+    if (!shown.length) return async (from, to) => new Float32Array(Math.max(0, Math.round((to - from) * SAMPLE_RATE)));
+    return (from, to) => readClip((start, end, rate) => readReel(shown, start, end, rate), list, from, to, SAMPLE_RATE);
   }
 
   const sceneAudio = (): Scene["audio"] => {
@@ -1379,7 +1476,6 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     cover,
     font: options.font,
     overlay: overlay ?? undefined,
-    backdrop,
     logo,
     links,
     layers: layersFor(layout).map((layer) => (layer.id === editingLayer ? { ...layer, hidden: true } : layer)),
@@ -1400,8 +1496,22 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     layers: () => layersFor(layout),
     change: setLayers,
     theme: () => theme,
+    documentColours: () => usedColours(),
+    notify: (message, action) => tell(message, action),
+    rehearse: (ids, part) => rehearse(ids, part),
+    deviceBox(layer, device) {
+      // The mockup keeps its middle and height; its width follows the device's own shape.
+      const { width, height } = SIZES[layout];
+      let h = layer.h;
+      let w = (h * height * DEVICES[device].aspect) / width;
+      if (w > 0.9) {
+        h *= 0.9 / w;
+        w = 0.9;
+      }
+      return { device, w, h, x: layer.x + layer.w / 2 - w / 2, y: layer.y + layer.h / 2 - h / 2 };
+    },
     fonts: () => fontList,
-    loadFont: (name, sample) => loadFont(name, sample).then(() => rebuild()),
+    loadFont: (name, sample) => loadFont(name, sample).then(refit),
     textOf: (layer) => painter.textOf(layer, 0),
     setText(layer, text) {
       if (layer.kind === "title") title = text;
@@ -1522,7 +1632,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     speaker,
     handle,
     cover: coverSource,
-    background: backdropSource,
+    background: backgroundSource(),
     logo: logoSource,
     music: musicSource,
     musicVolume,
@@ -1533,6 +1643,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     layers: Object.fromEntries(Object.entries(designs).map(([name, list]) => [name, list!.map((layer) => ({ ...layer }))])),
     images: Object.fromEntries([...pictures].filter(([key, picture]) => picture.listed || usedPicture(key)).map(([key, picture]) => [key, picture.source])),
     page,
+    recent: [...recent],
   });
 
   // The page hears about a change to the look once a frame, however many inputs moved in it.
@@ -1551,21 +1662,38 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     placeCaptions();
     painter = new Painter(scene());
     painter.animate = animating;
+    painter.placeholders = true;
+    painter.placeholderText = labels.dropPhoto;
+    painter.captionsSample = animating ? "" : labels.captionsSample;
+    painter.samples = animating ? {} : labels.wordSamples;
+    painter.rehearse = rehearsal;
     sizePreview();
     paint();
     renderCues();
     stage?.refresh();
     if (tab === "layers" && !timingHeld) renderLayers();
+    if (built) showBackgroundRow();
   }
 
   // Free editing: layers, their history, what can be added, and the fonts and pictures they use.
 
   const measurer = element("canvas", "").getContext("2d")!;
   const family = options.font ?? "Geist, ui-sans-serif, system-ui, sans-serif";
-  /** Free text grows and shrinks with its words. */
-  const fitted = (layer: Layer): Layer => {
-    if (layer.kind !== "text") return layer;
+  /** Free text grows and shrinks with its words: down as it wraps, and across too when its box hugs it. A box that
+   *  would run past the page's margins stops there and wraps from then on. */
+  const fitted = (start: Layer): Layer => {
+    if (start.kind !== "text") return start;
     const { width, height } = SIZES[layout];
+    let layer = start;
+    if (layer.autoWidth) {
+      const unit = Math.min(width, height) / 1080;
+      const least = (0.6 * (layer.size ?? 40) * unit) / width;
+      const most = 1 - (2 * Math.round(Math.min(width, height) * 0.074)) / width;
+      // A hair to spare, so rounding at a smaller preview never pushes the last letter onto a line of its own.
+      const natural = textWidth(measurer, layer, layer.text ?? "", family, width, height) + 2 / width;
+      layer = widthAnchored(layer, Math.min(most, Math.max(least, natural)), width, height);
+      if (natural >= most) layer = { ...layer, x: Math.min(Math.max(layer.x, (1 - most) / 2), 1 - (1 - most) / 2 - layer.w) };
+    }
     const h = Math.max(0.02, textHeight(measurer, layer, layer.text ?? "", family, width, height));
     // The box grows down from its own top edge, which for a turned layer isn't straight down the frame.
     const grow = ((h - layer.h) * height) / 2;
@@ -1739,7 +1867,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }
 
   function setLayers(next: Layer[], done: boolean) {
-    designs = { ...designs, [layout]: next.map(fitted) };
+    designs = { ...designs, [layout]: stacked(next).map(fitted) };
     rebuild();
     if (done) {
       record();
@@ -1757,7 +1885,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   function addText(text: string, size: number, weight: number) {
     const id = layerId("text");
-    addLayer({ id, kind: "text", text, x: 0.1, y: 0.42, w: 0.8, h: 0.1, rotation: 0, opacity: 1, size, weight, align: "center", color: "text" });
+    addLayer({ id, kind: "text", text, x: 0.1, y: 0.42, w: 0.8, h: 0.1, rotation: 0, opacity: 1, size, weight, align: "center", color: "text", autoWidth: true });
     stage.editText(id);
   }
 
@@ -1771,50 +1899,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     addLayer({ id: layerId("shape"), kind: "shape", x: 0.5 - w / 2, y: 0.5 - h / 2, w, h, rotation: 0, opacity: 1, fill: "accent", ...style });
   }
 
-  /** An empty photo frame in the shape given, to fill from Photos or by pressing it. */
-  function addFrame(mask: ShapeKind, radius: number) {
-    const { width, height } = SIZES[layout];
-    const side = 0.42 * Math.min(width, height);
-    addLayer({ id: layerId("image"), kind: "image", mask, radius: radius || undefined, x: 0.5 - side / width / 2, y: 0.5 - side / height / 2, w: side / width, h: side / height, rotation: 0, opacity: 1 });
-  }
-
-  /** Empty photo frames side by side or in a square, as one group, with a small gap between them. */
-  function addGrid(kind: "across" | "down" | "three" | "four") {
-    const columns = kind === "across" ? 2 : kind === "three" ? 3 : kind === "four" ? 2 : 1;
-    const rows = kind === "down" ? 2 : kind === "four" ? 2 : 1;
-    const { width, height } = SIZES[layout];
-    const gap = 12 / Math.min(width, height);
-    const area = { x: 0.08, y: 0.18, w: 0.84, h: 0.64 };
-    const group = layerId("group");
-    const cells: Layer[] = [];
-    for (let row = 0; row < rows; row++) {
-      for (let column = 0; column < columns; column++) {
-        const w = (area.w - gap * (columns - 1)) / columns;
-        const h = (area.h - gap * (rows - 1)) / rows;
-        cells.push({ id: layerId("image"), kind: "image", group, x: area.x + column * (w + gap), y: area.y + row * (h + gap), w, h, rotation: 0, opacity: 1 });
-      }
-    }
-    setLayers([...layersFor(layout), ...cells], true);
-    stage.select(cells[cells.length - 1].id);
-  }
-
-  /** A graphic from the library, a fifth of the page across, in the middle. */
-  function addGraphic(item: LibraryItem, sticker: boolean) {
-    const { width, height } = SIZES[layout];
-    const side = (sticker ? 0.24 : 0.2) * Math.min(width, height);
-    const aspect = item.art.w / item.art.h;
-    const w = (aspect >= 1 ? side : side * aspect) / width;
-    const h = (aspect >= 1 ? side / aspect : side) / height;
-    const mono = item.art.paths.some((part) => part.fill === "currentColor" || part.stroke === "currentColor");
-    addLayer({ id: layerId("graphic"), kind: "graphic", art: item.art, color: mono ? "text" : undefined, x: 0.5 - w / 2, y: 0.5 - h / 2, w, h, rotation: 0, opacity: 1 });
-  }
-
-  /** A heading and a line under it in two fonts that go together, grouped. */
   function addCombo(pair: { heading: string; body: string; headingWeight: number; uppercase?: boolean }) {
     const group = layerId("group");
-    const heading: Layer = { id: layerId("text"), kind: "text", group, text: labels.newText.heading, font: pair.heading, size: 96, weight: pair.headingWeight, uppercase: pair.uppercase, align: "center", color: "text", x: 0.1, y: 0.38, w: 0.8, h: 0.1, rotation: 0, opacity: 1 };
-    const body: Layer = { id: layerId("text"), kind: "text", group, text: labels.newText.subheading, font: pair.body, size: 40, weight: 400, align: "center", color: "text", x: 0.15, y: 0.5, w: 0.7, h: 0.06, rotation: 0, opacity: 1 };
-    void Promise.all([loadFont(pair.heading), loadFont(pair.body)]).then(() => rebuild());
+    const heading: Layer = { id: layerId("text"), kind: "text", group, text: labels.newText.heading, font: pair.heading, size: 96, weight: pair.headingWeight, uppercase: pair.uppercase, align: "center", color: "text", x: 0.1, y: 0.38, w: 0.8, h: 0.1, rotation: 0, opacity: 1, autoWidth: true };
+    const body: Layer = { id: layerId("text"), kind: "text", group, text: labels.newText.subheading, font: pair.body, size: 40, weight: 400, align: "center", color: "text", x: 0.15, y: 0.5, w: 0.7, h: 0.06, rotation: 0, opacity: 1, autoWidth: true };
+    void Promise.all([loadFont(pair.heading), loadFont(pair.body)]).then(refit);
     setLayers([...layersFor(layout), heading, body], true);
     stage.select(body.id);
   }
@@ -1870,8 +1959,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     canvas.width = Math.round(width * scale);
     canvas.height = Math.round(height * scale);
     const paint = () => {
-      const painter = new Painter({ ...scene(), layers: made.layers, page: made.page, theme: made.theme !== undefined ? THEMES[made.theme] ?? theme : theme, overlay: undefined });
+      // A thumbnail shows the template as it comes, without the user's background or other pictures.
+      const painter = new Painter({ ...scene(), backdrop: null, layers: made.layers, page: made.page, theme: made.theme !== undefined ? THEMES[made.theme] ?? theme : theme, overlay: undefined });
       painter.animate = false;
+      painter.placeholders = true;
+      painter.captionsSample = labels.captionsSample;
+      painter.samples = labels.wordSamples;
       painter.paint(canvas.getContext("2d")!, 0);
     };
     paint();
@@ -1887,104 +1980,301 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     renderPageSwatches();
     stage.select(null);
     setLayers(made.layers.map((layer) => ({ ...layer })), true);
-    void loadUsedFonts().then(() => rebuild());
+    void loadUsedFonts().then(refit);
   }
 
-  // The library's grids show a page of matches at a time; the search box narrows graphics and stickers together.
-  const PAGE = 48;
-  let graphicsShown = PAGE;
-  let stickersShown = PAGE;
-  // An emoji typed with its variation selector still finds the sticker that is listed without one.
-  const bare = (text: string) => text.toLowerCase().replace(/\uFE0F/g, "");
-  /**
-   * The items whose name or tags have a word starting with each word searched for, the closest first: a name that is
-   * the word, then a name that starts with it, then a word in the name, then a tag.
-   */
-  const matches = (items: LibraryItem[] | undefined) => {
-    const words = bare(elementSearch.value.trim()).split(/\s+/).filter(Boolean);
-    if (!words.length) return items ?? [];
-    const starts = (text: string, word: string) => (` ${text}`).replace(/[^\p{L}\p{N}\p{Extended_Pictographic}]+/gu, " ").includes(` ${word}`);
-    const scored: Array<[LibraryItem, number]> = [];
-    for (const item of items ?? []) {
-      const name = bare(item.name);
-      const tags = bare(item.tags ?? "");
-      let score = 0;
-      for (const word of words) {
-        const best = name === word ? 4 : name.startsWith(word) ? 3 : starts(name, word) ? 2 : starts(tags, word) ? 1 : 0;
-        if (!best) {
-          score = 0;
-          break;
+  // Elements: a row of tiles a section, each painted to show what it adds in the design's colours; See all opens a
+  // section whole, and the search looks through every one. What was added lately comes first.
+  const allTiles = elementTiles(labels.elementNames);
+  let recent: string[] = (options.recent ?? []).filter((tileId) => allTiles.some((tile) => tile.id === tileId)).slice(0, 8);
+  let openSection: SectionId | "recent" | null = null;
+  const ROW: Partial<Record<SectionId | "recent", number>> = { shapes: 8 };
+
+  function renderElements() {
+    const query = elementSearch.value.trim();
+    const grid = (tiles: ElementTile[]) => {
+      const node = element("div", "ag-el-grid");
+      node.append(...tiles.map(elementTile));
+      return node;
+    };
+    const head = (name: string, section: SectionId | "recent" | "photos", more: boolean) => {
+      const row = element("div", "ag-el-head");
+      const title = element("h3", "ag-heading");
+      title.textContent = name;
+      row.append(title);
+      if (more) {
+        const all = keyButton("ag-el-all", labels.seeAll, ICONS.next);
+        all.setAttribute("aria-label", labels.seeAllOf(name));
+        all.addEventListener("click", () => {
+          if (section === "photos") return selectTab("photos");
+          openSection = section;
+          renderElements();
+          elementsBody.querySelector<HTMLElement>(".ag-el-back")?.focus();
+        });
+        row.append(all);
+      }
+      return row;
+    };
+    const parts: HTMLElement[] = [];
+    if (query) {
+      const found = searchTiles(allTiles, query);
+      if (found.length) parts.push(grid(found));
+      else {
+        const nothing = element("p", "ag-help");
+        nothing.textContent = labels.nothingFound;
+        parts.push(nothing);
+      }
+    } else if (openSection) {
+      const back = keyButton("ag-el-back", labels.backToElements, ICONS.previous);
+      back.addEventListener("click", () => {
+        const was = openSection;
+        openSection = null;
+        renderElements();
+        elementsBody.querySelector<HTMLElement>(`[data-section="${was}"] .ag-el-all`)?.focus();
+      });
+      const tiles = openSection === "recent" ? recentTiles() : allTiles.filter((tile) => tile.section === openSection);
+      const name = element("h3", "ag-heading");
+      name.textContent = labels.sectionNames[openSection];
+      parts.push(back, name, grid(tiles));
+      if (openSection === "videos") parts.push(uploadVideoTile());
+    } else {
+      const sections: Array<SectionId | "recent"> = [...(recent.length ? ["recent" as const] : []), ...SECTIONS];
+      for (const section of sections) {
+        const tiles = section === "recent" ? recentTiles() : allTiles.filter((tile) => tile.section === section);
+        const shown = ROW[section] ?? 4;
+        const block = element("section", "ag-el-section");
+        block.dataset.section = section;
+        block.append(head(labels.sectionNames[section], section, tiles.length > shown || section === "videos"), grid(tiles.slice(0, shown)));
+        parts.push(block);
+        // Photos sit after the frames they fill: a few free ones, the rest a press away in Photos.
+        if (section === "grids" && library.photos?.length) {
+          const photos = element("section", "ag-el-section");
+          photos.dataset.section = "photos";
+          const row = element("div", "ag-el-grid");
+          row.append(...library.photos.slice(0, 4).map((photo) => {
+            const button = element("button", "ag-el");
+            button.type = "button";
+            button.setAttribute("aria-label", labels.addElement(photo.name));
+            const picture = element("img", "ag-el-picture");
+            picture.alt = "";
+            picture.loading = "lazy";
+            picture.src = photo.thumb;
+            const name = element("span", "ag-el-name");
+            name.textContent = photo.name;
+            button.append(picture, name);
+            button.addEventListener("click", () => void addStockPhoto(photo));
+            return button;
+          }));
+          photos.append(head(labels.sectionNames.photos, "photos", library.photos.length > 4), row);
+          parts.push(photos);
         }
-        score += best;
       }
-      if (score) scored.push([item, score]);
     }
-    return scored.sort((a, b) => b[1] - a[1]).map(([item]) => item);
-  };
-  function artPicture(art: Art): SVGSVGElement {
-    const ns = "http://www.w3.org/2000/svg";
-    const svg = document.createElementNS(ns, "svg");
-    svg.setAttribute("viewBox", `0 0 ${art.w} ${art.h}`);
-    svg.setAttribute("aria-hidden", "true");
-    for (const part of art.paths) {
-      const path = document.createElementNS(ns, "path");
-      path.setAttribute("d", part.d);
-      path.setAttribute("fill", part.fill ?? "none");
-      if (part.rule) path.setAttribute("fill-rule", part.rule);
-      if (part.stroke) {
-        path.setAttribute("stroke", part.stroke);
-        path.setAttribute("stroke-width", String(part.width ?? 1));
-        path.setAttribute("stroke-linecap", "round");
-        path.setAttribute("stroke-linejoin", "round");
-      }
-      svg.append(path);
-    }
-    return svg;
-  }
-  function renderArt(grid: HTMLElement, more: HTMLButtonElement, items: LibraryItem[], shown: number, sticker: boolean) {
-    grid.replaceChildren(...items.slice(0, shown).map((item) => {
-      const button = element("button", "ag-art");
-      button.type = "button";
-      button.title = item.name;
-      button.setAttribute("aria-label", labels.addGraphic(item.name));
-      button.append(artPicture(item.art));
-      button.addEventListener("click", () => addGraphic(item, sticker));
-      return button;
-    }));
-    more.hidden = items.length <= shown;
-  }
-  function renderLibrary() {
-    const graphics = matches(library.graphics);
-    const stickers = matches(library.stickers);
-    renderArt(graphicsGrid, graphicsMore, graphics, graphicsShown, false);
-    renderArt(stickerGrid, stickersMore, stickers, stickersShown, true);
-    graphicsHeading.hidden = graphicsGrid.hidden = !library.graphics?.length;
-    nothing.hidden = !elementSearch.value.trim() || Boolean(graphics.length || stickers.length);
-    // Without a library, the stickers are the system's own emoji.
-    if (!library.stickers?.length) {
-      stickerGrid.replaceChildren(...STICKERS.map((sticker) => {
-        const button = element("button", "ag-sticker");
-        button.type = "button";
-        button.textContent = sticker;
-        button.setAttribute("aria-label", labels.addSticker(sticker));
-        button.addEventListener("click", () => addSticker(sticker));
-        return button;
-      }));
-      stickersMore.hidden = true;
-    }
+    elementsBody.replaceChildren(...parts);
   }
   elementSearch.addEventListener("input", () => {
-    graphicsShown = stickersShown = PAGE;
-    renderLibrary();
+    openSection = null;
+    renderElements();
   });
-  graphicsMore.addEventListener("click", () => {
-    graphicsShown += PAGE;
-    renderLibrary();
-  });
-  stickersMore.addEventListener("click", () => {
-    stickersShown += PAGE;
-    renderLibrary();
-  });
+  const recentTiles = () => recent.map((tileId) => allTiles.find((tile) => tile.id === tileId)).filter((tile): tile is ElementTile => Boolean(tile));
+
+  /** Whether a colour has next to no hue, as the Paper theme's black accent has. */
+  const neutral = (hex: string) => {
+    const { s, v } = hexToHsv(hex);
+    return s < 0.15 || v < 0.12;
+  };
+  /** A new element on a theme whose accent is black, white or grey takes gold for that accent, so it arrives with colour. */
+  function vivid(layer: Layer): Layer {
+    if (!neutral(theme.accent)) return layer;
+    const gold = (paint: string | undefined) => (paint === undefined || paint === "accent" ? "metal:gold" : paint);
+    if (layer.kind === "shape" || layer.kind === "chart" || layer.kind === "solid" || layer.kind === "table") return { ...layer, fill: gold(layer.fill) };
+    if (layer.kind === "visual") return { ...layer, color: gold(layer.color) };
+    return layer;
+  }
+
+  /** A tile: what it adds, painted small in the design's colours, and its name under it. */
+  function elementTile(tile: ElementTile) {
+    const button = element("button", "ag-el");
+    button.type = "button";
+    button.dataset.tile = tile.id;
+    button.setAttribute("aria-label", labels.addElement(tile.name));
+    button.title = tile.name;
+    const picture = element("canvas", "ag-el-picture");
+    picture.setAttribute("aria-hidden", "true");
+    const name = element("span", "ag-el-name");
+    name.textContent = tile.name;
+    button.append(picture, name);
+    button.addEventListener("click", () => addFromTile(tile));
+    if (tileWatch) tileWatch.observe(button);
+    else paintTile(picture, tile);
+    return button;
+  }
+  function uploadVideoTile() {
+    const button = element("button", "ag-el ag-el-upload");
+    button.type = "button";
+    const picture = element("span", "ag-el-picture");
+    picture.append(icon(ICONS.video));
+    const name = element("span", "ag-el-name");
+    name.textContent = labels.uploadVideo;
+    button.append(picture, name);
+    button.addEventListener("click", () => uploadInput.click());
+    const row = element("div", "ag-el-grid");
+    row.append(button);
+    return row;
+  }
+  const tileWatch = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      tileWatch!.unobserve(entry.target);
+      const button = entry.target as HTMLElement;
+      const tile = allTiles.find((item) => item.id === button.dataset.tile);
+      if (tile) paintTile(button.querySelector("canvas")!, tile);
+    }
+  }, { root: drawer });
+
+  // A tile's sound: a voice-like hum, so the sound tiles look alive; and a caption with a word being said.
+  const TILE_RATE = 8000;
+  const tileSound = Float32Array.from({ length: TILE_RATE * 6 }, (_, i) => (Math.sin((i / TILE_RATE) * 2 * Math.PI * 220) * 0.5 + Math.sin((i / TILE_RATE) * 2 * Math.PI * 660) * 0.3) * (0.4 + 0.6 * Math.abs(Math.sin((i / TILE_RATE) * 7))));
+  function paintTile(canvas: HTMLCanvasElement, tile: ElementTile) {
+    const side = 144;
+    canvas.width = side;
+    canvas.height = side;
+    const made = tile.make("square", (kind) => `${kind}-tile`).map((layer) => {
+      const shown = vivid(layer);
+      // A sound visual's own box is a wide strip; in a tile it gets the height to show its bars, wave or pulse.
+      return shown.kind === "visual" ? { ...shown, x: 0.12, y: 0.3, w: 0.76, h: 0.4 } : shown;
+    });
+    if (!made.length) return;
+    // The tile shows the layers fitted into its middle, their shape kept; a full-page background fills it.
+    const left = Math.min(...made.map((layer) => layer.x));
+    const top = Math.min(...made.map((layer) => layer.y));
+    const right = Math.max(...made.map((layer) => layer.x + layer.w));
+    const bottom = Math.max(...made.map((layer) => layer.y + layer.h));
+    const fill = tile.under ? 1 : 0.76 / Math.max(right - left, bottom - top);
+    // Words, tables and lines true to scale would be a pixel or two at this size, so a tile draws them bolder.
+    const line = (layer: Layer) => layer.kind === "shape" && layer.shape === "line";
+    const worded = (layer: Layer) => layer.kind === "table" || layer.kind === "captions" || layer.kind === "text" || layer.kind === "title" || layer.kind === "name" || layer.kind === "handle" || layer.kind === "links" || layer.kind === "time";
+    const layers = made.map((layer) => ({
+      ...layer,
+      x: 0.5 + (layer.x - (left + right) / 2) * fill,
+      y: 0.5 + (layer.y - (top + bottom) / 2) * fill,
+      w: layer.w * fill,
+      h: layer.h * fill,
+      size: worded(layer) ? (layer.size ?? (layer.kind === "table" ? 30 : 40)) * fill * 1.9 : layer.size,
+      strokeWidth: layer.strokeWidth ? Math.max(3, layer.strokeWidth * fill * (line(layer) ? 3.2 : 1.4)) : layer.strokeWidth,
+      enter: undefined,
+      exit: undefined,
+    }));
+    const painter = new Painter({
+      ...scene(),
+      layout: "square",
+      layers,
+      page: { color: theme.background },
+      backdrop: null,
+      logo: null,
+      overlay: undefined,
+      captions: [{ start: 4.5, end: 6, text: labels.captionsSample }],
+      audio: { samples: tileSound, sampleRate: TILE_RATE, start: 0, end: 6 },
+    });
+    painter.animate = false;
+    painter.placeholders = true;
+    // Sound bars ease towards the sound, so a few frames first let them rise to it.
+    const ctx = canvas.getContext("2d")!;
+    // Late in the hum, so a wave's few seconds behind the playhead are all sound.
+    for (const at of [4.85, 4.9, 4.95, 5]) painter.paint(ctx, at);
+  }
+
+  /** Adds a tile's layers on top of the design, or a moving background under it, and keeps the tile for Recently used. */
+  function addFromTile(tile: ElementTile) {
+    recent = [tile.id, ...recent.filter((tileId) => tileId !== tile.id)].slice(0, 8);
+    if (tile.part) addElement(tile.part.kind, tile.part.look);
+    else {
+      const made = tile.make(layout, layerId).map((layer) => fitted(vivid(tile.under ? { ...layer, backdrop: true } : layer)));
+      if (!made.length) return;
+      const kept = tile.under ? layersFor(layout).filter((layer, index) => !layer.backdrop && !(index === 0 && isBackgroundLayer(layer))) : layersFor(layout);
+      setLayers(tile.under ? [...made, ...kept] : [...kept, ...made], true);
+      stage.select(made[made.length - 1].id);
+      if (tile.under) tell(labels.addedUnder(tile.name));
+    }
+    changed();
+    // Recently used comes first when the panel is next drawn; drawn now, it would move the tile just pressed.
+  }
+
+  /** A picture or video put into a frame or a mockup's screen, in place of what it showed. */
+  async function fillFrame(frameId: string, file: Blob) {
+    const video = VIDEO_TYPES.includes(file.type);
+    if (!video && !PICTURE_TYPES.includes(file.type)) return tell(labels.uploadFailed);
+    if (file.size > (video ? VIDEO_LIMIT : PICTURE_LIMIT)) return tell(video ? labels.videoTooBig : labels.pictureTooBig);
+    const key = layerId("picture");
+    try {
+      await keepPicture(file, key, true);
+    } catch {
+      return tell(video ? labels.uploadFailed : labels.pictureFailed);
+    }
+    setLayers(layersFor(layout).map((layer) => (layer.id !== frameId ? layer : { ...layer, image: key, crop: undefined, kind: layer.kind === "mockup" ? "mockup" : video ? "video" : "image" })), true);
+    stage.select(frameId);
+    renderUploads();
+    if (video) syncVideos(clipTime(), !audio.paused);
+    announce(labels.frameFilled);
+  }
+
+  /** A dropped picture or video, kept with the uploads and put on the picture on top of the rest. */
+  async function uploadAndPlace(file: Blob) {
+    const video = VIDEO_TYPES.includes(file.type);
+    if (file.size > (video ? VIDEO_LIMIT : PICTURE_LIMIT)) return tell(video ? labels.videoTooBig : labels.pictureTooBig);
+    const key = layerId("picture");
+    try {
+      await keepPicture(file, key, true);
+    } catch {
+      return tell(video ? labels.uploadFailed : labels.pictureFailed);
+    }
+    addPicture(key);
+    renderUploads();
+    changed();
+  }
+
+  // Showing a movement once: the picked layers play their way in, out or loop on the picture, the rest held still, for
+  // the movement's length and a breath after it. Playing, an edit or a press on the picture ends it.
+  /** Words measured before their font arrived are fitted again once it has, without making a step to undo. */
+  function refit() {
+    const before = JSON.stringify(layersFor(layout));
+    const after = layersFor(layout).map(fitted);
+    if (JSON.stringify(after) !== before) {
+      designs = { ...designs, [layout]: after };
+      if (historyAt >= 0) history[historyAt] = snapshot();
+      changed();
+    }
+    rebuild();
+  }
+
+  let rehearsal: { ids: Set<string>; part: "enter" | "exit" | "loop"; at: number } | null = null;
+  let rehearsalFrame = 0;
+  function stopRehearsal() {
+    cancelAnimationFrame(rehearsalFrame);
+    if (!rehearsal) return;
+    rehearsal = null;
+    painter.rehearse = null;
+    paint();
+  }
+  function rehearse(ids: string[], part: "enter" | "exit" | "loop") {
+    stopRehearsal();
+    if (!ids.length || animating) return;
+    const chosen = layersFor(layout).filter((layer) => ids.includes(layer.id));
+    const span = Math.max(...chosen.map((layer) => {
+      const way = part === "enter" ? layer.enter : part === "exit" ? layer.exit : undefined;
+      return (part === "loop" ? 3 : way ? entranceLength(way) : 0) / Math.min(4, Math.max(0.25, layer.speed ?? 1));
+    }), 0);
+    if (!span) return;
+    const started = performance.now();
+    const step = () => {
+      const at = (performance.now() - started) / 1000;
+      rehearsal = at <= span + 0.4 ? { ids: new Set(ids), part, at } : null;
+      painter.rehearse = rehearsal;
+      paint();
+      if (rehearsal) rehearsalFrame = requestAnimationFrame(step);
+    };
+    step();
+  }
 
   function renderPhotos() {
     const words = photoSearch.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
@@ -2044,15 +2334,16 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     comboGrid.hidden = !usable.length;
   }
 
-  /** An emoji as a big text layer in the middle of the page. */
-  function addSticker(sticker: string) {
-    const { width, height } = SIZES[layout];
-    const side = 0.22 * Math.min(width, height);
-    addLayer({ id: layerId("text"), kind: "text", text: sticker, x: 0.5 - side / width / 2, y: 0.5 - side / height / 2, w: side / width, h: side / height, rotation: 0, opacity: 1, size: 180, align: "center" });
-  }
-
   /** One of the clip's own parts, where the classic card has it, or a little off it when one is there already. */
   function addElement(kind: LayerKind, look?: Visual) {
+    if (kind === "captions") {
+      const shown = showCaptions(layersFor(layout));
+      if (shown) {
+        setLayers(shown, true);
+        stage.select(shown[shown.length - 1].id);
+        return;
+      }
+    }
     const classic = defaultLayers(layout).find((layer) => layer.kind === kind);
     if (!classic) return;
     const taken = layersFor(layout).some((layer) => layer.kind === kind && Math.abs(layer.x - classic.x) < 0.01 && Math.abs(layer.y - classic.y) < 0.01);
@@ -2089,6 +2380,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }
 
   function markTheme() {
+    if (built && tab === "elements") renderElements();
     const index = String(THEMES.indexOf(theme));
     for (const button of themeTiles.querySelectorAll<HTMLButtonElement>("[data-value]")) {
       const on = button.dataset.value === index;
@@ -2097,44 +2389,35 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     }
   }
 
-  function setPage(next: Page | null) {
+  /** A page colour picked: shown at once, and kept as a step to undo unless a shade is still being dragged. */
+  function setPage(next: Page | null, done = true) {
     page = next;
     rebuild();
+    if (!done) return;
     record();
     changed();
-    renderPageSwatches();
+    markPicked(pageSwatches, page);
   }
 
-  /** The page's colours: the theme's own, plain colours, gradients and any colour at all. */
+  /** Every colour the design on the page uses, for the pickers' first row. */
+  const usedColours = () => documentColours([
+    page?.color,
+    page?.to,
+    ...layersFor(layout).flatMap((layer) => [layer.color, layer.fill, layer.stroke, layer.highlight, layer.outline, layer.background, layer.effectColor]),
+  ]);
+
+  /** The page's colour picker. It is drawn again when something else changes the page, such as a theme, a template or
+   *  an undo, and left alone while it is used, so a shade can be dragged on it. */
   function renderPageSwatches() {
-    // The swatch pressed is drawn again; focus goes back to its new self.
     const focused = pageSwatches.contains(document.activeElement) ? (document.activeElement as HTMLElement).getAttribute("aria-label") : null;
-    const same = (a: Page | null, b: Page | null) => JSON.stringify(a) === JSON.stringify(b);
-    const key = (name: string, fill: string, value: Page | null) => {
-      const button = element("button", "ag-swatch-key");
-      button.type = "button";
-      button.setAttribute("aria-label", name);
-      button.title = name;
-      button.setAttribute("aria-pressed", String(same(page, value)));
-      const dot = element("span", "ag-dot");
-      dot.style.background = fill;
-      button.append(dot);
-      button.addEventListener("click", () => setPage(value));
-      return button;
-    };
-    const custom = element("label", "ag-custom-colour");
-    const input = element("input", "");
-    input.type = "color";
-    input.value = page && /^#[0-9a-f]{6}$/i.test(page.color) && !page.to ? page.color : "#ffffff";
-    input.addEventListener("change", () => setPage({ color: input.value }));
-    const name = element("span", "");
-    name.textContent = labels.stage.custom;
-    custom.append(input, name);
-    const plain = element("div", "ag-swatch-row");
-    plain.append(key(labels.themePage, `linear-gradient(135deg, ${theme.background} 50%, ${theme.shade} 50%)`, null), ...PAGE_COLOURS.map((color, index) => key(labels.pageNames[index] ?? color, color, { color })));
-    const blends = element("div", "ag-swatch-row");
-    blends.append(...GRADIENTS.map((gradient, index) => key(labels.gradientNames[index] ?? "", `linear-gradient(${gradient.angle}deg, ${gradient.color}, ${gradient.to})`, gradient)));
-    pageSwatches.replaceChildren(plain, blends, custom);
+    pageSwatches.replaceChildren(colourPanel({
+      current: page,
+      theme,
+      used: usedColours(),
+      page: true,
+      labels: labels.stage.colourPicker ?? COLOUR_LABELS,
+      onPick: (choice: ColourChoice, done) => setPage(choice === null || typeof choice === "object" ? choice : { color: choice }, done),
+    }));
     if (focused) [...pageSwatches.querySelectorAll<HTMLElement>("[aria-label]")].find((node) => node.getAttribute("aria-label") === focused)?.focus();
   }
 
@@ -2178,7 +2461,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   /** The videos on the page now, each once. */
   function videosShown(): HTMLVideoElement[] {
-    const keys = new Set(layersFor(layout).filter((layer) => layer.kind === "video" && !layer.hidden).map((layer) => layer.image ?? ""));
+    const keys = new Set(layersFor(layout).filter((layer) => (layer.kind === "video" || layer.kind === "mockup") && !layer.hidden).map((layer) => layer.image ?? ""));
     return [...keys].map((key) => pictures.get(key)?.video).filter((video): video is HTMLVideoElement => Boolean(video));
   }
 
@@ -2273,7 +2556,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   /** Reads the window of sound around `time` seconds into the clip, unless the one at hand still has room around it. */
   function loadWindow(time: number) {
-    if (!source) return;
+    if (!recordings.length) return;
     const key = clipKey();
     const length = clipLength();
     const shown = clipWindow?.key === key ? clipWindow : null;
@@ -2299,7 +2582,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let clipTimer = 0;
   function scheduleClip() {
     clearTimeout(clipTimer);
-    if (source) clipTimer = window.setTimeout(() => loadWindow(clipTime()), 150);
+    if (recordings.length) clipTimer = window.setTimeout(() => loadWindow(clipTime()), 150);
   }
 
   // The recording along the bottom.
@@ -2318,13 +2601,40 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     return { width, height, ratio };
   }
 
+  /**
+   * The outline under `bars` bars across `[from, to]` of the timeline, as min, max pairs, each recording's in its own
+   * stretch, and whether each bar's sound has been read yet.
+   */
+  function reelBars([from, to]: View, bars: number): { data: Float32Array; read: boolean[] } {
+    const data = new Float32Array(bars * 2);
+    const read = new Array<boolean>(bars).fill(false);
+    const step = (to - from) / bars;
+    for (const { source, offset } of recordings) {
+      // The bars whose middles fall in this recording.
+      const first = Math.max(0, Math.ceil((offset - from) / step - 0.5));
+      const last = Math.min(bars, Math.ceil((offset + source.duration - from) / step - 0.5));
+      if (last <= first) continue;
+      data.set(outlineBars(source.outline, OUTLINE_RATE, [from + first * step - offset, from + last * step - offset], last - first), first * 2);
+      for (let i = first; i < last; i++) read[i] = from + (i + 0.5) * step - offset <= source.outlined;
+    }
+    return { data, read };
+  }
+
+  /** A thin line down the canvas where one recording ends and the next begins, for each join inside `[from, to]`. */
+  function drawJoins(g: CanvasRenderingContext2D, [from, to]: View, width: number, height: number, ratio: number, colour: string) {
+    g.fillStyle = colour;
+    for (const { offset } of recordings.slice(1)) {
+      if (offset > from && offset < to) g.fillRect(Math.round(((offset - from) / (to - from)) * width), 0, Math.max(1, Math.round(ratio)), height);
+    }
+  }
+
   function drawWave() {
     const { width, height, ratio } = sizeCanvas(wave, track);
     const g = wave.getContext("2d")!;
     g.clearRect(0, 0, width, height);
-    if (!source) return;
+    if (!recordings.length) return;
     const bars = Math.max(1, Math.floor(width / (3 * ratio)));
-    const data = outlineBars(source.outline, OUTLINE_RATE, view, bars);
+    const { data, read } = reelBars(view, bars);
     const style = getComputedStyle(root);
     const inside = style.getPropertyValue("--ag-wave-in").trim() || "#121212";
     const outside = style.getPropertyValue("--ag-wave").trim() || "#999";
@@ -2334,23 +2644,24 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       const lit = (time >= range[0] && time <= range[1]) || parts.some(([start, end]) => time >= start && time <= end);
       g.fillStyle = lit ? inside : outside;
       // Not read yet: a faint flat line where the sound will show.
-      g.globalAlpha = time > source.outlined ? 0.4 : 1;
+      g.globalAlpha = read[i] ? 1 : 0.4;
       const amplitude = Math.max(1 * ratio, (data[i * 2 + 1] - data[i * 2]) * mid * 0.92);
       g.fillRect(i * 3 * ratio, mid - amplitude / 2, 2 * ratio, amplitude);
     }
     g.globalAlpha = 1;
+    drawJoins(g, view, width, height, ratio, style.getPropertyValue("--ag-edge").trim() || outside);
   }
 
-  // The overview, shown while zoomed in: the whole recording, where the view is, and where the clip is.
+  // The overview, shown while zoomed in: the whole timeline, where the view is, and where the clip is.
   function drawMap() {
-    const whole = !source || view[1] - view[0] >= duration() - 1e-6;
+    const whole = !recordings.length || view[1] - view[0] >= duration() - 1e-6;
     map.hidden = whole;
-    if (whole || !source) return;
+    if (whole) return;
     const { width, height, ratio } = sizeCanvas(mapCanvas, map);
     const g = mapCanvas.getContext("2d")!;
     g.clearRect(0, 0, width, height);
     const bars = Math.max(1, Math.floor(width / (2 * ratio)));
-    const data = outlineBars(source.outline, OUTLINE_RATE, [0, duration()], bars);
+    const { data } = reelBars([0, duration()], bars);
     const style = getComputedStyle(root);
     const outside = style.getPropertyValue("--ag-wave").trim() || "#999";
     const accent = style.getPropertyValue("--ag-accent").trim() || "#2ff0b8";
@@ -2361,6 +2672,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       const amplitude = Math.max(ratio, (data[i * 2 + 1] - data[i * 2]) * mid * 0.9);
       g.fillRect(i * 2 * ratio, mid - amplitude / 2, ratio, amplitude);
     }
+    drawJoins(g, [0, duration()], width, height, ratio, style.getPropertyValue("--ag-edge").trim() || outside);
     mapView.style.left = `${(view[0] / duration()) * 100}%`;
     mapView.style.width = `${((view[1] - view[0]) / duration()) * 100}%`;
   }
@@ -2380,7 +2692,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     startHandle.hidden = !inView(range[0]);
     endHandle.hidden = !inView(range[1]);
     playheadLine.style.left = `${toX(playhead)}%`;
-    playheadLine.hidden = !source || !inView(playhead);
+    playheadLine.hidden = !recordings.length || !inView(playhead);
     // The strip lights where the clip is, which is where the playhead can go.
     const clamp = (value: number) => Math.min(100, Math.max(0, value));
     const lit = [...spans()].sort((a, b) => a[0] - b[0]).flatMap(([start, end]) => [`transparent ${clamp(toX(start))}%`, `var(--ag-accent) ${clamp(toX(start))}%`, `var(--ag-accent) ${clamp(toX(end))}%`, `transparent ${clamp(toX(end))}%`]);
@@ -2397,34 +2709,64 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       handleNode.setAttribute("aria-valuetext", `${formatTime(value)}, clip ${formatTime(length)} long`);
     }
     clipClock.textContent = `${formatTime(Math.max(0, clipTime()))} / ${formatTime(clipLength())}`;
-    const outlined = source?.outlined ?? 0;
-    reading.textContent = source && outlined < duration() ? labels.reading(clock(outlined), clock(duration())) : "";
+    const outlined = recordings.reduce((sum, { source }) => sum + source.outlined, 0);
+    reading.textContent = recordings.length && outlined < duration() - 1e-6 ? labels.reading(clock(outlined), clock(duration())) : "";
     // The zoom keys show for recordings long enough to need them, and rest at their limits.
     const span = view[1] - view[0];
-    zoomKeys.hidden = !source || duration() <= ZOOMABLE;
+    zoomKeys.hidden = !recordings.length || duration() <= ZOOMABLE;
     zoomInButton.disabled = span <= Math.min(10, duration()) + 1e-6;
     zoomOutButton.disabled = wholeButton.disabled = span >= duration() - 1e-6;
-    // A part can be added while the clip has room for the whole selected stretch.
-    exportButton.disabled = !source;
+    // The clip is made once the recording being added is in it.
+    exportButton.disabled = !recordings.length || adding;
     openButton.disabled = exporting;
-    const full = !source || partsLength(parts) + length > maxLength + 1e-6;
-    addPartButton.disabled = full;
-    addPartButton.title = source && full ? labels.partsFull : labels.addPartHint;
+    // Another recording can come in while the clip has room for some of it.
+    const full = !hasRoom();
+    addRecordingButton.disabled = !recordings.length || exporting || adding || root.dataset.state === "loading" || full;
+    addRecordingButton.title = recordings.length && full ? labels.partsFull : labels.addRecordingHint;
+    splitButton.disabled = !splittable();
   }
 
-  function setRange(start: number, end: number, which?: "start" | "end", reveal = true) {
+  function hasRoom() {
+    return maxLength - clipLength() >= MIN_LENGTH - 1e-6;
+  }
+
+  /** Whether the part being edited can be cut at the playhead, leaving both halves long enough to keep. */
+  /** The part the playhead could cut in two, by its place in the parts; -1 for the selection alone, null for none. */
+  function splitPart(): number | null {
+    const inside = ([start, end]: readonly [number, number]) => playhead >= start + MIN_LENGTH - 1e-6 && playhead <= end - MIN_LENGTH + 1e-6;
+    if (!parts.length) return inside(range) ? -1 : null;
+    const index = parts.findIndex(inside);
+    return index < 0 ? null : index;
+  }
+  function splittable() {
+    return Boolean(recordings.length) && !exporting && splitPart() !== null;
+  }
+
+  /**
+   * Selects `[start, end]` inside recording `home`, the one the selection is in unless told otherwise. While the clip
+   * has parts, the selection is the part being edited, and changes with it.
+   */
+  function setRange(start: number, end: number, which?: "start" | "end", reveal = true, home = recordingOf(range)) {
     if (exporting) return;
-    const total = duration() || Math.max(start, end);
-    start = Math.max(0, Math.min(start, total - MIN_LENGTH));
-    end = Math.min(total, Math.max(end, start + MIN_LENGTH));
-    // The longest clip allowed: the edge being dragged pushes the other along rather than going past it.
-    if (end - start > maxLength) {
-      if (which === "start") end = start + maxLength;
-      else start = end - maxLength;
+    const [lo, hi] = recordings.length ? boundsOf(home) : [0, Math.max(start, end)];
+    start = Math.max(lo, Math.min(start, hi - MIN_LENGTH));
+    end = Math.min(hi, Math.max(end, start + MIN_LENGTH));
+    // The longest clip allowed, counting the other parts: the edge being dragged pushes the other along rather than
+    // going past it.
+    const longest = Math.max(MIN_LENGTH, maxLength - (parts.length ? partsLength(parts) - (parts[active][1] - parts[active][0]) : 0));
+    if (end - start > longest) {
+      if (which === "start") end = start + longest;
+      else start = end - longest;
     }
     range = [start, end];
+    if (parts.length) {
+      const moved = parts[active][0] !== start || parts[active][1] !== end;
+      parts[active] = [start, end];
+      renderParts();
+      if (moved) options.onParts?.(parts.map(([from, to]) => [from, to]));
+    }
     if (playhead < start || playhead > end) playhead = start;
-    if (reveal && source) view = showSpan(view, duration(), range);
+    if (reveal && recordings.length) view = showSpan(view, duration(), range);
     drawWave();
     drawMap();
     placeTimeline();
@@ -2437,12 +2779,26 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let frame = 0;
   let playing = 0;
   let shownCue = -1;
+
+  /** Plays on from `time` with the player of recording `index`, pausing the one before it. */
+  function switchTo(index: number, time: number) {
+    const next = recordings[index];
+    if (next.player !== audio) audio.pause();
+    audio = next.player;
+    current = index;
+    audio.currentTime = Math.max(0, time - next.offset);
+    if (animating && audio.paused) void audio.play();
+  }
+
   function tick() {
     frame = 0;
-    if (audio.paused) return;
-    playhead = audio.currentTime;
+    // A player stops by itself at the end of its recording; the clip carries on into its next part.
+    if (audio.paused && !audio.ended) return;
     const list = spans();
+    playing = Math.min(playing, list.length - 1);
+    playhead = audio.ended ? Math.max(reelTime(), list[playing][1]) : reelTime();
     if (playhead >= list[playing][1]) {
+      const end = list[playing][1];
       playing++;
       if (playing >= list.length) {
         stop();
@@ -2454,21 +2810,24 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         return;
       }
       playhead = list[playing][0];
-      audio.currentTime = playhead;
+      // The second half of a split carries straight on from the first, so it plays on without a seek.
+      const next = recordingOf(list[playing]);
+      if (next !== current || playhead !== end) switchTo(next, playhead);
     }
     paint();
     placeTimeline();
     // The captions list keeps the one being said on show.
-    const active = cueAt(cues, playhead);
-    if (active !== shownCue) {
-      shownCue = active;
+    const said = cueAt(cues, playhead);
+    if (said !== shownCue) {
+      shownCue = said;
       renderCues();
     }
     frame = requestAnimationFrame(tick);
   }
 
   function play() {
-    if (!source || exporting) return;
+    if (!recordings.length || exporting) return;
+    stopRehearsal();
     const list = spans();
     playing = list.findIndex(([start, end]) => playhead >= start && playhead < end - 0.05);
     if (playing < 0) {
@@ -2476,7 +2835,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       playhead = list[0][0];
     }
     loadWindow(clipTime());
-    audio.currentTime = playhead;
+    switchTo(recordingOf(list[playing]), playhead);
     painter.reset();
     void audio.play();
     animating = true;
@@ -2495,6 +2854,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   function stop() {
     audio.pause();
+    for (const { player } of recordings) player.pause();
     musicAudio.pause();
     cancelAnimationFrame(frame);
     if (animating) {
@@ -2511,8 +2871,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   function seek(time: number) {
     playhead = intoClip(Math.max(0, Math.min(duration(), time)));
-    if (!audio.paused) {
-      audio.currentTime = playhead;
+    if (animating && recordings.length) {
+      // Playback goes on from the part the playhead is in now, with its recording's player.
+      const list = spans();
+      playing = Math.max(0, list.findIndex(([start, end]) => playhead >= start && playhead <= end));
+      switchTo(recordingOf(list[playing]), playhead);
       if (music) musicAudio.currentTime = clipTime() % music.duration;
     }
     painter.reset();
@@ -2622,7 +2985,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   function tap() {
     if (!tapping || tapIndex >= cues.length) return;
-    cues = markStart(cues, tapIndex, audio.currentTime);
+    cues = markStart(cues, tapIndex, reelTime());
     tapIndex++;
     showTapHint();
     painter = new Painter(scene());
@@ -2654,38 +3017,60 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     else delete importCard.dataset.done;
   }
 
+  /** What a recording is called on its chip: its file's name, or its place on the timeline when it has none. */
+  function nameOf(from: string | Blob, index: number): string {
+    let name = from instanceof File ? from.name : "";
+    if (typeof from === "string" && !/^(data|blob):/i.test(from)) {
+      try {
+        name = decodeURIComponent(from.split(/[?#]/)[0].split("/").pop() ?? "");
+      } catch {
+        // An address with a broken escape in it goes by its place instead.
+      }
+    }
+    return name || labels.recording(index);
+  }
+
+  const recordingList = () => recordings.map(({ input, name, offset, source }) => ({ source: input, name, start: offset, end: offset + source.duration }));
+
   let opening = 0;
   async function load(from: string | Blob) {
     if (exporting) return;
     const mine = ++opening;
     stop();
+    // Opening a recording takes over from one still being added.
+    adding = false;
     root.dataset.state = "loading";
     announce(labels.loading);
+    importName.textContent = labels.importing;
     importProgress(0);
+    placeTimeline();
     let next: AudioSource;
     try {
       next = await openSource(from, { onOutline: outlineChanged, onProgress: (fraction) => mine === opening && importProgress(fraction) });
     } catch (error) {
       if (mine !== opening) return;
       importProgress(1);
-      root.dataset.state = source ? "ready" : "empty";
+      root.dataset.state = recordings.length ? "ready" : "empty";
+      placeTimeline();
       tell(labels.openFailed);
       throw error;
     }
     // A recording picked after this one has taken its place.
     if (mine !== opening) return next.close();
-    source?.close();
-    source = next;
-    sourceInput = from;
+    // The clip starts afresh: every recording on it goes, with its parts.
+    for (const recording of recordings) closeRecording(recording);
+    recordings = [{ source: next, input: from, name: nameOf(from, 1), offset: 0, player: playerOf(next.url) }];
+    audio = recordings[0].player;
+    current = 0;
     generation++;
     clipWindow = null;
     windowPending = null;
+    active = 0;
     if (parts.length) {
       parts = [];
       renderParts();
       options.onParts?.([]);
     }
-    audio.src = next.url;
     root.dataset.state = "ready";
     live.textContent = "";
     const keep = firstLoad && range[1] > range[0] && range[1] <= next.duration;
@@ -2694,18 +3079,67 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const [start, end] = keep ? range : [0, maxLength < next.duration ? maxLength : next.duration];
     view = initialView(next.duration, [start, end]);
     playhead = start;
-    setRange(start, end);
+    setRange(start, end, undefined, true, 0);
+  }
+
+  /**
+   * Adds a recording after the ones on the timeline. The clip so far stays as it is, as its first part when it had
+   * none, and the new recording comes in after it as a part of its own, ready to trim.
+   */
+  async function append(from: string | Blob) {
+    if (!recordings.length || exporting || adding || root.dataset.state === "loading") return;
+    if (!hasRoom()) return tell(labels.partsFull);
+    // An Open audio after this wins, as it does over an earlier one.
+    const mine = ++opening;
+    stop();
+    adding = true;
+    const name = nameOf(from, recordings.length + 1);
+    announce(labels.adding(name));
+    importName.textContent = labels.adding(name);
+    importProgress(0);
+    placeTimeline();
+    let next: AudioSource;
+    try {
+      next = await openSource(from, { onOutline: outlineChanged, onProgress: (fraction) => mine === opening && importProgress(fraction) });
+    } catch (error) {
+      if (mine !== opening) return;
+      adding = false;
+      importProgress(1);
+      placeTimeline();
+      tell(labels.addFailed);
+      throw error;
+    }
+    if (mine !== opening) return next.close();
+    adding = false;
+    stop();
+    if (!parts.length) {
+      parts = [[range[0], range[1]]];
+      active = 0;
+    }
+    const room = maxLength - clipLength();
+    const offset = duration();
+    recordings.push({ source: next, input: from, name, offset, player: playerOf(next.url) });
+    const span: [number, number] = [offset, offset + Math.min(next.duration, room)];
+    parts.push(span);
+    active = parts.length - 1;
+    range = [...span];
+    playhead = span[0];
+    view = initialView(duration(), span);
+    partsChanged();
+    announce(labels.added(name, parts.length));
+    options.onRecordings?.(recordingList());
   }
 
   // Exporting.
 
   async function exportVideo(choice: { fps?: number; scale?: number } = {}): Promise<ExportResult | null> {
-    if (!source || exporting) return null;
+    if (!recordings.length || exporting || adding) return null;
     stop();
     exporting = true;
     root.dataset.state = "exporting";
     exportButton.setAttribute("aria-disabled", "true");
     stage.refresh();
+    placeTimeline();
     try {
       await loadUsedFonts();
       const result = await exportClip(scene(), {
@@ -2739,54 +3173,101 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       root.dataset.state = "ready";
       exportButton.removeAttribute("aria-disabled");
       stage.refresh();
+      placeTimeline();
       rename(exportButton, labels.export);
       exportButton.removeAttribute("aria-label");
       meter.style.removeProperty("--progress");
     }
   }
 
-  // Parts: the add key keeps the selected stretch; each chip selects its part, removes it, or drags to a new place.
+  // Parts: the selection edits one at a time, and each chip picks its part for it, removes it, or drags to a new
+  // place. Split cuts the part being edited in two at the playhead; Add recording brings another file in after them.
 
   function partsChanged() {
     if (exporting) return;
     renderParts();
     drawWave();
     drawMap();
+    // Playback carries on from where it is, in whichever part that is now; a still playhead stays inside the clip.
+    if (animating) seek(playhead);
+    else playhead = intoClip(playhead);
     placeTimeline();
     rebuild();
     scheduleClip();
     options.onParts?.(parts.map(([start, end]) => [start, end]));
   }
 
+  /** Makes part `index` the one the selection edits. */
+  function pickPart(index: number, reveal = true) {
+    active = index;
+    setRange(parts[index][0], parts[index][1], undefined, reveal, recordingOf(parts[index]));
+  }
+
+  /** A part as its chip shows it: with several recordings, which one it comes from and its times in that one. */
+  function partName(index: number) {
+    const [start, end] = parts[index];
+    const recording = recordings.length > 1 ? recordings[recordingOf(parts[index])] : null;
+    const shift = recording?.offset ?? 0;
+    return { name: recording?.name ?? "", from: formatTime(start - shift), to: formatTime(end - shift) };
+  }
+
   function renderParts() {
-    partList.replaceChildren(...parts.map(([start, end], index) => {
+    // Drawing the chips again keeps the keyboard on the chip it was on.
+    const focused = partList.contains(document.activeElement) ? (document.activeElement as HTMLElement).closest<HTMLElement>(".ag-part")?.dataset.index : undefined;
+    // One part is just the clip, so the chips show once there are two to order.
+    partList.hidden = parts.length < 2;
+    partList.replaceChildren(...parts.map((_, index) => {
+      const { name, from, to } = partName(index);
       const item = element("li", "ag-part");
       item.dataset.index = String(index);
       const pick = element("button", "ag-part-pick");
       pick.type = "button";
-      pick.textContent = `${index + 1} · ${formatTime(start)}–${formatTime(end)}`;
-      pick.setAttribute("aria-label", labels.part(index + 1, formatTime(start), formatTime(end)));
+      if (name) {
+        const named = element("span", "ag-part-name");
+        named.textContent = name;
+        named.title = name;
+        pick.append(`${index + 1} · `, named, ` · ${from}–${to}`);
+      } else pick.textContent = `${index + 1} · ${from}–${to}`;
+      pick.setAttribute("aria-label", labels.part(index + 1, name, from, to));
+      if (index === active) {
+        item.dataset.active = "";
+        pick.setAttribute("aria-current", "true");
+      }
       pick.addEventListener("click", () => {
-        if (reordered) return;
-        setRange(start, end);
-        seek(start);
+        if (reordered || exporting) return;
+        pickPart(index);
+        seek(parts[index][0]);
       });
       const remove = iconButton("ag-part-remove", labels.removePart(index + 1), ICONS.remove);
       remove.addEventListener("click", () => {
         if (exporting) return;
         parts.splice(index, 1);
+        // The part after the removed one is edited next, or the one before it when it was the last.
+        if (index < active || active >= parts.length) active = Math.max(0, active - 1);
+        if (parts.length) range = [...parts[active]];
         partsChanged();
       });
       item.append(pick, remove);
       return item;
     }));
+    if (focused !== undefined && !reordered) partList.querySelector<HTMLElement>(`[data-index="${focused}"] .ag-part-pick`)?.focus();
   }
 
-  addPartButton.addEventListener("click", () => {
-    if (!source || exporting || partsLength(parts) + range[1] - range[0] > maxLength + 1e-6) return;
-    parts.push([range[0], range[1]]);
+  splitButton.addEventListener("click", () => {
+    if (!splittable()) return;
+    if (!parts.length) {
+      parts = [[range[0], range[1]]];
+      active = 0;
+    } else active = splitPart() ?? active;
+    // Both halves end and start on the very same time, so the clip plays straight through the cut until one is trimmed.
+    const [start, end] = parts[active];
+    const at = playhead;
+    parts.splice(active, 1, [start, at], [at, end]);
+    active++;
+    range = [at, end];
     partsChanged();
-    announce(labels.part(parts.length, formatTime(range[0]), formatTime(range[1])));
+    const { name, from, to } = partName(active);
+    announce(labels.part(active + 1, name, from, to));
   });
 
   let reorder: { pointerId: number; index: number; x: number } | null = null;
@@ -2813,6 +3294,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (over < 0 || over === reorder.index) return;
     const [moved] = parts.splice(reorder.index, 1);
     parts.splice(over, 0, moved);
+    // The part being edited stays the same part wherever it moves to.
+    if (active === reorder.index) active = over;
+    else if (reorder.index < active && over >= active) active--;
+    else if (reorder.index > active && over <= active) active++;
     reorder.index = over;
     renderParts();
   });
@@ -2829,7 +3314,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   // Pointer on the recording: drag an edge, drag the clip along, or drag across the rest to select a new stretch.
 
-  let drag: { kind: "start" | "end" | "move" | "new"; pointerId: number; from: number; x: number; range: [number, number] } | null = null;
+  let drag: { kind: "start" | "end" | "move" | "new"; pointerId: number; from: number; x: number; range: [number, number]; home: number } | null = null;
   const timeAt = (clientX: number) => {
     const box = track.getBoundingClientRect();
     return view[0] + Math.max(0, Math.min(1, (clientX - box.left) / box.width)) * (view[1] - view[0]);
@@ -2842,11 +3327,24 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     }
   }
   track.addEventListener("pointerdown", (event) => {
-    if (!source || exporting || event.button !== 0) return;
+    if (!recordings.length || exporting || event.button !== 0) return;
     const target = event.target as Element;
     const time = timeAt(event.clientX);
+    const edge = target === startHandle || target === endHandle;
+    // A press on another part picks it, as its chip does, and drags it along.
+    const other = edge || (time > range[0] && time < range[1]) ? -1 : parts.findIndex(([start, end]) => time > start && time < end);
+    if (other >= 0) pickPart(other, false);
     const kind = target === startHandle ? "start" : target === endHandle ? "end" : time > range[0] && time < range[1] ? "move" : "new";
-    drag = { kind, pointerId: event.pointerId, from: time, x: event.clientX, range: [...range] };
+    // A new stretch drawn on another recording redraws that recording's nearest part, when it has one.
+    const pressed = recordingAt(time);
+    if (kind === "new" && parts.length && pressed !== recordingOf(range)) {
+      const gap = ([start, end]: [number, number]) => (time < start ? start - time : time > end ? time - end : 0);
+      const nearest = parts.reduce((best, part, index) => (recordingOf(part) === pressed && (best < 0 || gap(part) < gap(parts[best])) ? index : best), -1);
+      if (nearest >= 0) pickPart(nearest, false);
+    }
+    // A new stretch is drawn in the recording it starts in; an edge or a move keeps to the selection's own.
+    const home = kind === "new" ? pressed : recordingOf(range);
+    drag = { kind, pointerId: event.pointerId, from: time, x: event.clientX, range: [...range], home };
     capture(track, event.pointerId);
     event.preventDefault();
   });
@@ -2854,16 +3352,17 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (!drag || event.pointerId !== drag.pointerId) return;
     const delta = timeAt(event.clientX) - drag.from;
     const [start, end] = drag.range;
-    if (drag.kind === "start") setRange(start + delta, end, "start", false);
-    else if (drag.kind === "end") setRange(start, end + delta, "end", false);
+    if (drag.kind === "start") setRange(start + delta, end, "start", false, drag.home);
+    else if (drag.kind === "end") setRange(start, end + delta, "end", false, drag.home);
     else if (drag.kind === "new") {
       // A press that doesn't travel leaves the selection as it was.
       if (Math.abs(event.clientX - drag.x) < 4) return;
       const at = timeAt(event.clientX);
-      setRange(Math.min(drag.from, at), Math.max(drag.from, at), at < drag.from ? "start" : "end", false);
+      setRange(Math.min(drag.from, at), Math.max(drag.from, at), at < drag.from ? "start" : "end", false, drag.home);
     } else {
-      const shift = Math.max(-start, Math.min(duration() - end, delta));
-      setRange(start + shift, end + shift, undefined, false);
+      const [lo, hi] = boundsOf(drag.home);
+      const shift = Math.max(lo - start, Math.min(hi - end, delta));
+      setRange(start + shift, end + shift, undefined, false, drag.home);
     }
   });
   const endDrag = () => (drag = null);
@@ -2885,9 +3384,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // moves and carries on from where it is let go.
   let scrubbing: { pointerId: number; resume: boolean } | null = null;
   scrub.addEventListener("pointerdown", (event) => {
-    if (!source || event.button !== 0) return;
-    scrubbing = { pointerId: event.pointerId, resume: !audio.paused && !tapping };
-    if (!audio.paused) stop();
+    if (!recordings.length || event.button !== 0) return;
+    scrubbing = { pointerId: event.pointerId, resume: animating && !tapping };
+    if (animating) stop();
     root.dataset.scrubbing = "";
     capture(scrub, event.pointerId);
     event.preventDefault();
@@ -2925,7 +3424,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   zoomOutButton.addEventListener("click", () => setView(zoomView(view, duration(), 2, zoomAnchor())));
   wholeButton.addEventListener("click", () => setView([0, duration()]));
   zoomed.addEventListener("wheel", (event) => {
-    if (!source) return;
+    if (!recordings.length) return;
     if (event.ctrlKey || event.metaKey) {
       event.preventDefault();
       setView(zoomView(view, duration(), Math.exp(event.deltaY * 0.002), timeAt(event.clientX)));
@@ -2943,7 +3442,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     setView(panView(view, duration(), time - (view[0] + view[1]) / 2));
   };
   map.addEventListener("pointerdown", (event) => {
-    if (!source || event.button !== 0) return;
+    if (!recordings.length || event.button !== 0) return;
     mapping = event.pointerId;
     capture(map, event.pointerId);
     lookAt(event.clientX);
@@ -2954,7 +3453,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   // Buttons and keys.
 
-  playButton.addEventListener("click", () => (audio.paused ? play() : stop()));
+  playButton.addEventListener("click", () => (animating ? stop() : play()));
   function renderDownload() {
     const group = (name: string, choices: Array<[string, boolean, () => void]>) => {
       const box = element("div", "ag-field");
@@ -3001,7 +3500,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     exportButton.setAttribute("aria-expanded", "false");
   }
   exportButton.addEventListener("click", () => {
-    if (exporting || !source) return;
+    if (exporting || adding || !recordings.length) return;
     if (!download.hidden) return closeDownload();
     renderDownload();
     download.hidden = false;
@@ -3013,9 +3512,53 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     closeDownload();
     exportButton.focus();
   });
+  function closeStartOver(refocus: boolean) {
+    startOverPanel.hidden = true;
+    startOverButton.setAttribute("aria-expanded", "false");
+    if (refocus) startOverButton.focus();
+  }
+  startOverButton.addEventListener("click", () => {
+    if (!startOverPanel.hidden) return closeStartOver(false);
+    closeDownload();
+    startOverPanel.hidden = false;
+    startOverButton.setAttribute("aria-expanded", "true");
+    cancelStart.focus();
+  });
+  cancelStart.addEventListener("click", () => closeStartOver(true));
+  confirmStart.addEventListener("click", () => startOver());
+  startOverPanel.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") closeStartOver(true);
+  });
+
+  /** The design cleared back to how the editor opens: no layers, the opening page and theme, and none of the frame's
+   *  own words. The recording, captions, music, profile picture, links and uploads stay, and Undo brings it back. */
+  function startOver() {
+    closeStartOver(false);
+    stage.select(null);
+    cancelAnimationFrame(rehearsalFrame);
+    rehearsal = null;
+    designs = options.blank ? Object.fromEntries(LAYOUTS.map((shape) => [shape, []])) : {};
+    page = options.blank ? { color: "#ffffff" } : null;
+    theme = THEMES[options.blank ? 1 : 0];
+    title = speaker = handle = "";
+    titleField.querySelector("input")!.value = "";
+    speakerField.querySelector("input")!.value = "";
+    handleField.querySelector("input")!.value = "";
+    captionsPlaced = false;
+    markTheme();
+    renderPageSwatches();
+    applyZoom(null);
+    rebuild();
+    placeCaptions();
+    record();
+    changed();
+    tell(labels.startedOver, { label: labels.undo, run: () => travel(-1) });
+    startOverButton.focus();
+  }
   const gone = new AbortController();
   document.addEventListener("pointerdown", (event) => {
     if (!download.hidden && !download.contains(event.target as Node) && !exportButton.contains(event.target as Node)) closeDownload();
+    if (!startOverPanel.hidden && !startOverPanel.contains(event.target as Node) && !startOverButton.contains(event.target as Node)) closeStartOver(false);
   }, { signal: gone.signal });
 
   /** The picture at the playhead as a PNG, the way the video shows it at that moment. */
@@ -3047,6 +3590,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (file) void load(file).catch(() => {});
     audioInput.value = "";
   });
+  addRecordingButton.addEventListener("click", () => recordingInput.click());
+  recordingInput.addEventListener("change", () => {
+    const file = recordingInput.files?.[0];
+    if (file) void append(file).catch(() => {});
+    recordingInput.value = "";
+  });
   tapButton.addEventListener("click", () => setTapping(!tapping));
   preview.addEventListener("pointerdown", () => tapping && tap());
   addButton.addEventListener("click", () => {
@@ -3061,17 +3610,32 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     input?.focus();
     input?.select();
   });
+  /**
+   * Captions read from a file are timed from the start of their recording, the one the selection is in: they move to
+   * where it starts on the timeline and take the place of its captions, leaving the other recordings' alone.
+   */
+  function importCaptions(text: string) {
+    const read = parseSubtitles(text);
+    if (!recordings.length) cues = read;
+    else {
+      const home = recordingOf(range);
+      const [lo, end] = boundsOf(home);
+      const hi = home < recordings.length - 1 ? end : Infinity;
+      const kept = cues.filter((cue) => cue.end <= lo || cue.start >= hi);
+      cues = [...kept, ...read.map((cue) => shiftCue(cue, lo)).filter((cue) => cue.start < hi)].sort((a, b) => a.start - b.start);
+    }
+    rebuild();
+  }
   importButton.addEventListener("click", () => importInput.click());
   importInput.addEventListener("change", async () => {
     const file = importInput.files?.[0];
     importInput.value = "";
     if (!file) return;
-    cues = parseSubtitles(await file.text());
-    rebuild();
+    importCaptions(await file.text());
   });
   downloadButton.addEventListener("click", () => {
     const link = element("a", "");
-    link.href = URL.createObjectURL(new Blob([toSRT(clip(cues, range[0], range[1]))], { type: "text/plain" }));
+    link.href = URL.createObjectURL(new Blob([toSRT(parts.length ? stitchCues(cues, parts) : clip(cues, range[0], range[1]))], { type: "text/plain" }));
     link.download = "clip.srt";
     link.click();
     setTimeout(() => URL.revokeObjectURL(link.href), 4000);
@@ -3100,15 +3664,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const id = replacing;
     replacing = null;
     if (!file || !id) return;
-    if (!PICTURE_TYPES.includes(file.type) || file.size > PICTURE_LIMIT) return tell(file.size > PICTURE_LIMIT ? labels.pictureTooBig : labels.pictureFailed);
-    const key = layerId("picture");
-    try {
-      await keepPicture(file, key, true);
-    } catch {
-      return tell(labels.pictureFailed);
-    }
-    setLayers(layersFor(layout).map((layer) => (layer.id === id ? { ...layer, image: key } : layer)), true);
-    renderUploads();
+    await fillFrame(id, file);
   });
   uploadButton.addEventListener("click", () => uploadInput.click());
   uploadInput.addEventListener("change", async () => {
@@ -3159,8 +3715,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (target.tagName === "BUTTON") return;
     event.preventDefault();
     if (tapping) tap();
-    else if (audio.paused) play();
-    else stop();
+    else if (animating) stop();
+    else play();
   });
 
   // A file dropped anywhere on the editor opens: a recording, captions, or a picture for the profile.
@@ -3177,17 +3733,19 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const file = event.dataTransfer?.files[0];
     if (!file) return;
     event.preventDefault();
-    if (file.type.startsWith("image/")) void loadImage(file).then((image) => {
+    const under = (PICTURE_TYPES.includes(file.type) || VIDEO_TYPES.includes(file.type)) ? stage.layerAtClient?.(event.clientX, event.clientY) ?? null : null;
+    if (under?.kind === "avatar" && file.type.startsWith("image/")) void loadImage(file).then((image) => {
       cover = image;
       coverSource = file;
       coverRow.show(file);
       rebuild();
       changed();
     }).catch(() => tell(labels.pictureFailed));
-    else if (/\.(srt|vtt)$/i.test(file.name)) void file.text().then((text) => {
-      cues = parseSubtitles(text);
-      rebuild();
-    });
+    else if (under && !under.locked && (under.kind === "image" || under.kind === "video" || under.kind === "mockup")) void fillFrame(under.id, file);
+    else if (PICTURE_TYPES.includes(file.type) || VIDEO_TYPES.includes(file.type)) void uploadAndPlace(file);
+    else if (/\.(srt|vtt)$/i.test(file.name)) void file.text().then(importCaptions);
+    // A recording dropped on the timeline or the parts joins the clip; anywhere else it opens in place of it.
+    else if (recordings.length && (timeline.contains(event.target as Node) || partList.contains(event.target as Node))) void append(file).catch(() => {});
     else void load(file).catch(() => {});
   });
 
@@ -3206,28 +3764,36 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   rebuild();
   placeTimeline();
   coverRow.show(coverSource);
-  backgroundRow.show(backdropSource);
   musicRow.show(musicSource);
   if (options.cover) void loadImage(options.cover).then((image) => {
     cover = image;
     rebuild();
   });
-  if (options.background) void loadImage(options.background).then((image) => {
-    backdrop = image;
-    rebuild();
-  });
+  // A host's background from before backgrounds were layers: it goes under the design on the page, at the strength
+  // the old wash of the page's colour over it left it.
+  if (options.background) {
+    const source = options.background;
+    void keepPicture(source, "background", false).then(() => {
+      if (backgroundOf(layersFor(layout))) return;
+      designs = { ...designs, [layout]: [{ id: layerId("image"), kind: "image", image: "background", x: 0, y: 0, w: 1, h: 1, rotation: 0, opacity: 0.26, backdrop: true }, ...layersFor(layout)] };
+      rebuild();
+      record();
+      changed();
+    }).catch(() => {});
+  }
   if (options.music) void setMusic(options.music).then(() => musicRow.show(options.music!)).catch(() => musicRow.show(null));
   for (const [key, source] of Object.entries(options.images ?? {})) void keepPicture(source, key, true).then(() => {
     renderUploads();
     rebuild();
   }).catch(() => {});
-  void loadUsedFonts().then(() => rebuild());
+  void loadUsedFonts().then(refit);
   renderPageSwatches();
   renderTemplates();
-  renderLibrary();
+  renderElements();
   renderPhotos();
   renderCombos();
   built = true;
+  showBackgroundRow();
   placeCaptions();
   record();
   if (options.logo) void loadImage(options.logo).then((image) => {
@@ -3252,6 +3818,13 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       await ready.catch(() => {});
       await load(next);
     },
+    async addRecording(next) {
+      await ready.catch(() => {});
+      await (recordings.length ? append(next) : load(next));
+    },
+    get recordings() {
+      return recordingList();
+    },
     setCaptions(next) {
       // While tapping, the caption waiting for its tap stays the one waited for, wherever new captions put it.
       const waiting = tapping ? cues[tapIndex] : null;
@@ -3262,7 +3835,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       }
       rebuild();
     },
-    setRange: (start, end) => setRange(start, end),
+    setRange: (start, end) => setRange(start, end, undefined, true, recordingAt((start + end) / 2)),
     play,
     pause: stop,
     export: exportVideo,
@@ -3274,7 +3847,17 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     },
     setParts(next) {
       if (exporting) return;
-      parts = next.filter(([start, end]) => end > start).map(([start, end]) => [start, end]);
+      // Each part is kept inside the recording it lies in, and the selection edits the first.
+      const fit = ([start, end]: [number, number]): [number, number] => {
+        if (!recordings.length) return [start, end];
+        const [lo, hi] = boundsOf(recordingAt((start + end) / 2));
+        return [Math.max(lo, start), Math.min(hi, end)];
+      };
+      parts = next.map(fit).filter(([start, end]) => end > start);
+      active = 0;
+      if (parts.length) range = [...parts[0]];
+      if (animating) seek(playhead);
+      else playhead = intoClip(playhead);
       renderParts();
       drawWave();
       drawMap();
@@ -3283,10 +3866,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       scheduleClip();
     },
     get source() {
-      return sourceInput;
+      return recordings[0]?.input ?? null;
     },
     readAudio(start, end, sampleRate) {
-      return source ? source.read(start, end, sampleRate) : Promise.reject(new Error("No recording is open"));
+      return recordings.length ? readReel(reel(), start, end, sampleRate) : Promise.reject(new Error("No recording is open"));
     },
     setOverlay(next) {
       overlay = next;
@@ -3296,7 +3879,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     slots: { header: headerSlot, actions: actionsSlot, captions: captionsSlot },
     setFonts(next) {
       fontList = next;
-      void loadUsedFonts().then(() => rebuild());
+      void loadUsedFonts().then(refit);
+      renderTemplates();
       renderCombos();
       stage.refresh();
     },
@@ -3311,7 +3895,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     },
     setLibrary(next) {
       library = next;
-      renderLibrary();
+      renderElements();
       renderPhotos();
     },
     destroy() {
@@ -3319,10 +3903,13 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       observer.disconnect();
       zoomWatch.disconnect();
       templateWatch?.disconnect();
+      tileWatch?.disconnect();
+      stopRehearsal();
+      clearTimeout(noticeTimer);
       gone.abort();
       stage.destroy();
-      source?.close();
-      source = null;
+      for (const recording of recordings) closeRecording(recording);
+      recordings = [];
       music?.close();
       for (const picture of pictures.values()) {
         picture.video?.pause();

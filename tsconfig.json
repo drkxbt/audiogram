@@ -34,6 +34,15 @@
     "ui.ts",
     "layers.ts",
     "stage.ts",
-    "templates.ts"
+    "templates.ts",
+    "colour.ts",
+    "elements.ts",
+    "paint-env.ts",
+    "paint-chart.ts",
+    "paint-table.ts",
+    "paint-mockup.ts",
+    "paint-solid.ts",
+    "paint-ambient.ts",
+    "paint-placeholder.ts"
   ]
 }

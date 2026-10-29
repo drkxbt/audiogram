@@ -4,15 +4,51 @@
 
 import type { Layout, Visual } from "./render.js";
 
-export type LayerKind = "avatar" | "name" | "handle" | "title" | "visual" | "time" | "captions" | "links" | "text" | "image" | "video" | "shape" | "graphic";
+export type LayerKind = "avatar" | "name" | "handle" | "title" | "visual" | "time" | "captions" | "links" | "text" | "image" | "video" | "shape" | "graphic" | "chart" | "table" | "mockup" | "solid" | "ambient";
 
-export type ShapeKind = "rect" | "ellipse" | "triangle" | "star" | "heart" | "arrow" | "diamond" | "bubble" | "pentagon" | "hexagon" | "octagon" | "cross" | "parallelogram" | "arch" | "line";
+/** A chart's form: columns or bars, a line or the area under it, a pie or a donut, a ring or a bar of progress, one
+ *  big number, or a poll of answers with their shares. */
+export type ChartKind = "column" | "bar" | "line" | "area" | "pie" | "donut" | "ring" | "progress" | "number" | "poll";
 
-/** How a layer comes in when its time starts, or goes as it ends. */
-export type Entrance = "fade" | "rise" | "pan" | "slide" | "pop" | "wipe" | "blur" | "zoom" | "breathe" | "baseline" | "drift" | "tumble" | "stomp" | "bounce" | "flicker" | "typewriter";
+/** A device or object a picture is shown in. */
+export type Device = "phone" | "tablet" | "laptop" | "monitor" | "tv" | "browser" | "polaroid" | "vinyl";
+
+/** A shaded form that looks solid. */
+export type Solid = "sphere" | "cube" | "cylinder" | "cone" | "torus" | "pyramid" | "capsule";
+
+/** A moving background drawn from the clip's time: soft lights, a drifting gradient, bokeh, rising specks, waves,
+ *  slow rays, a receding grid, or film grain. */
+export type Ambient = "aurora" | "flow" | "bokeh" | "particles" | "waves" | "rays" | "grid" | "grain";
+
+/** One row of a chart's data. */
+export interface Datum {
+  label: string;
+  value: number;
+  color?: Paint;
+}
+
+export type ShapeKind =
+  | "rect" | "ellipse" | "triangle" | "star" | "heart" | "arrow" | "diamond" | "bubble" | "pentagon" | "hexagon" | "octagon" | "cross" | "parallelogram" | "arch" | "line"
+  | "burst" | "sparkle" | "squircle" | "blob" | "ring" | "quote" | "banner" | "tag" | "chevron" | "cloud" | "moon" | "check";
+
+/** How a layer comes in when its time starts, or goes as it ends. Some move words one at a time: ascend, shift and
+ *  merge by the word, burst and cascade by the letter; on a layer without words they move it whole. */
+export type Entrance =
+  | "fade" | "rise" | "pan" | "slide" | "pop" | "wipe" | "blur" | "zoom" | "breathe" | "baseline" | "drift" | "tumble" | "stomp" | "bounce" | "flicker" | "typewriter"
+  | "ascend" | "shift" | "merge" | "burst" | "cascade" | "spread" | "block" | "clarify" | "glide" | "roll" | "skate" | "elastic" | "flip" | "unfold" | "iris" | "curtain" | "fall" | "tectonic" | "scrapbook" | "shine"
+  | "grow";
 
 /** A movement that repeats for as long as the layer shows. */
-export type Loop = "pulse" | "wiggle" | "rotate" | "float";
+export type Loop = "pulse" | "wiggle" | "rotate" | "float" | "sway" | "heartbeat" | "shimmer" | "flash" | "slowZoom";
+
+/** The way a layer moves as it comes in: up means it rises into place. */
+export type Direction = "up" | "down" | "left" | "right";
+
+/** The ways in that move words one at a time, and whether by the word or the letter. */
+export const UNIT_WAYS: Partial<Record<Entrance, "word" | "letter">> = { ascend: "word", shift: "word", merge: "word", burst: "letter", cascade: "letter" };
+
+/** The ways in that take a direction, and the one each takes when none is set. */
+export const DIRECTED: Partial<Record<Entrance, Direction>> = { rise: "up", pan: "right", slide: "right", wipe: "right", drift: "right", shift: "right", roll: "right", skate: "right", tectonic: "right", fall: "down", baseline: "up" };
 
 /** A look for words, one at a time, beyond the shadow, outline and colour behind them. */
 export type TextEffect = "lift" | "hollow" | "splice" | "echo" | "glitch" | "neon";
@@ -101,12 +137,47 @@ export interface Layer {
   dash?: "solid" | "dashed" | "dotted";
   arrowStart?: boolean;
   arrowEnd?: boolean;
+  /** Lines: round ends, and a bend through the box from -100 (bowed down) to 100 (bowed up). */
+  cap?: "round";
+  bend?: number;
   /** Pictures: the shape the picture is cut to, where it sits when cropped, and a ready-made look. */
   mask?: ShapeKind;
   crop?: Crop;
   filter?: string;
   /** A graphic's drawing. */
   art?: Art;
+  /** Words: the box hugs them, a new line only where one is typed; false once the user sets the width, when they wrap. */
+  autoWidth?: boolean;
+  /** A picture or video set as the page's background: it covers the page and stays under every other layer. */
+  backdrop?: boolean;
+  /** Charts: the form, its rows, the value a ring or progress bar is out of, words before and after each value, and
+   *  whether to show the labels, the values and guide lines. `fill` colours the series, `stroke` the track and guides,
+   *  `color` the words. */
+  chart?: ChartKind;
+  data?: Datum[];
+  max?: number;
+  prefix?: string;
+  suffix?: string;
+  showLabels?: boolean;
+  showValues?: boolean;
+  showGrid?: boolean;
+  /** Tables: rows of cells, the first row as a header in `fill`, every other row tinted with `background`, and rules
+   *  between rows or round every cell in `stroke`. */
+  cells?: string[][];
+  header?: boolean;
+  stripes?: boolean;
+  rules?: "none" | "rows" | "grid";
+  /** Mockups: the device; its picture is `image`, its body colour `fill`, a polaroid's caption `text`. */
+  device?: Device;
+  /** Solids: the form, in `fill`, with a shine on it unless `gloss` is false; `shadow` false leaves out the shadow
+   *  under it. */
+  solid?: Solid;
+  gloss?: boolean;
+  /** Moving backgrounds: the style, how fast it moves (1 as made), and whether it swells with the voice; `fill` is its
+   *  ground, `color` and `highlight` its two lights. */
+  ambient?: Ambient;
+  pace?: number;
+  react?: boolean;
   /** Layers with the same group are picked, moved and copied together. */
   group?: string;
   /** How it comes in, goes, and moves while it shows, how fast, and the seconds into the clip it shows from and until;
@@ -114,6 +185,8 @@ export interface Layer {
   enter?: Entrance;
   exit?: Entrance;
   loop?: Loop;
+  /** The way it moves as it comes in, for the ways that take one; it leaves the same way, carrying on. */
+  direction?: Direction;
   speed?: number;
   from?: number;
   until?: number;
@@ -190,6 +263,52 @@ export function defaultLayers(layout: Layout): Layer[] {
   const footer = height - pad * (landscape ? 0.6 : 0.68);
   layers.push(box("links", pad, footer - 22 * unit, width - pad * 2, 44 * unit, { size: 28, weight: 500, color: "muted", align: "center" }));
   return layers;
+}
+
+/** Whether a layer is a design's background: one set as the background, or, from before that was marked, a picture
+ *  or a video filling the whole frame. */
+export function isBackgroundLayer(layer: Layer): boolean {
+  if (layer.backdrop) return true;
+  return (layer.kind === "image" || layer.kind === "video") && !layer.rotation && layer.x <= 0.001 && layer.y <= 0.001 && layer.x + layer.w >= 0.999 && layer.y + layer.h >= 0.999;
+}
+
+/** A design's background, which always sits at the bottom of its layers, or null when it has none. */
+export function backgroundOf(layers: Layer[]): Layer | null {
+  return layers[0] && isBackgroundLayer(layers[0]) ? layers[0] : null;
+}
+
+/** Layers in painting order with any background first: whatever is added, pasted, moved forward or brought back by an
+ *  undo lands above it. The same array comes back when it is already in order. */
+export function stacked<T extends { backdrop?: boolean }>(layers: T[]): T[] {
+  const first = layers.findIndex((layer) => !layer.backdrop);
+  if (first < 0 || !layers.slice(first).some((layer) => layer.backdrop)) return layers;
+  return [...layers.filter((layer) => layer.backdrop), ...layers.filter((layer) => !layer.backdrop)];
+}
+
+/** Whether a layer is a panel that covers most of the page, so a background set under it would hardly show. */
+export function pageCovers(layer: Layer): boolean {
+  return layer.kind === "shape" && layer.shape !== "line" && !layer.hidden && (layer.opacity ?? 1) >= 0.9 && !layer.rotation && layer.w * layer.h >= 0.7;
+}
+
+/** The layers with captions shown again when they were only hidden, brought to the top so nothing covers them; null
+ *  when some are already showing or there are none to show. */
+export function showCaptions(layers: Layer[]): Layer[] | null {
+  if (layers.some((layer) => layer.kind === "captions" && !layer.hidden)) return null;
+  const index = layers.findLastIndex((layer) => layer.kind === "captions");
+  if (index < 0) return null;
+  return [...layers.slice(0, index), ...layers.slice(index + 1), { ...layers[index], hidden: false }];
+}
+
+/** A layer given a new width `w` (a share of the frame's width) about the edge its words line up on: the left edge for
+ *  left-aligned words, the middle for centred, the right edge for right-aligned, along the layer's own turn, so the
+ *  words stay exactly where they were. */
+export function widthAnchored<T extends Box & { rotation: number; align?: "left" | "center" | "right" }>(layer: T, w: number, width: number, height: number): T {
+  const align = layer.align ?? "left";
+  const shift = align === "center" ? 0 : ((w - layer.w) * width) / 2 * (align === "right" ? -1 : 1);
+  const angle = (layer.rotation * Math.PI) / 180;
+  const cx = (layer.x + layer.w / 2) * width + Math.cos(angle) * shift;
+  const cy = (layer.y + layer.h / 2) * height + Math.sin(angle) * shift;
+  return { ...layer, w, x: cx / width - w / 2, y: cy / height - layer.h / 2 };
 }
 
 /** Where a point in frame fractions falls in a layer's own unturned box, about its centre, in pixels. */
@@ -331,8 +450,10 @@ export function alignToPage<T extends Box & { rotation: number }>(layer: T, edge
 }
 
 /** Where a layer is in its movement, for one frame: its fade, its shift as shares of its own size, its scale and turn
- *  in degrees, a blur in pixels of a 1080 frame, the share of it uncovered from the left, the share of its words shown
- *  so far, and whether it is held inside its own box while it moves. */
+ *  in degrees, a blur in pixels of a 1080 frame, the share of it uncovered and from where, the share of its words shown
+ *  so far, and whether it is held inside its own box while it moves. Beyond those: a squeeze across, a block of colour
+ *  sweeping over it, its words moving one at a time, letters spread apart by a share of the size, and a band of light
+ *  crossing it. */
 export interface Motion {
   alpha: number;
   dx: number;
@@ -343,13 +464,33 @@ export interface Motion {
   clip: number;
   reveal: number;
   boxed: boolean;
+  sx: number;
+  clipFrom: ClipFrom;
+  /** How far a chart or table has grown in, from 0 to 1. */
+  growth: number;
+  block: number | null;
+  units: { way: Entrance; p: number; direction: Direction } | null;
+  spacing: number;
+  shine: number | null;
 }
 
-// Seconds each movement takes at its usual speed: most come in in a little over half a second; a slow one, or letters
-// typed one at a time, take longer.
-const DURATIONS: Partial<Record<Entrance, number>> = { breathe: 1.2, drift: 1.4, typewriter: 1.4, bounce: 1, flicker: 0.8 };
+/** Where an uncovering starts: an edge, the middle line across or down, or the centre as a growing circle. */
+export type ClipFrom = "left" | "right" | "top" | "bottom" | "across" | "down" | "iris";
+
+// Seconds each movement takes at its usual speed: most come in in a little over half a second; a slow one, or words
+// and letters moving one at a time, take longer.
+const DURATIONS: Partial<Record<Entrance, number>> = {
+  breathe: 1.2, drift: 1.4, typewriter: 1.4, bounce: 1, flicker: 0.8,
+  ascend: 1.1, shift: 1, merge: 1, burst: 1, cascade: 1.2, spread: 1, block: 0.9, clarify: 1, glide: 1.6, roll: 0.9,
+  skate: 0.8, elastic: 1.1, flip: 0.7, unfold: 0.7, iris: 0.8, curtain: 0.8, fall: 0.8, tectonic: 0.8, scrapbook: 0.8, shine: 1.4, grow: 1.2,
+};
 const DURATION = 0.6;
-const SETTLED: Motion = { alpha: 1, dx: 0, dy: 0, scale: 1, rotate: 0, blur: 0, clip: 1, reveal: 1, boxed: false };
+const SETTLED: Motion = { alpha: 1, dx: 0, dy: 0, scale: 1, rotate: 0, blur: 0, clip: 1, reveal: 1, boxed: false, sx: 1, clipFrom: "left", growth: 1, block: null, units: null, spacing: 0, shine: null };
+
+/** How long a way in takes at its usual speed, in seconds. */
+export function entranceLength(way: Entrance): number {
+  return DURATIONS[way] ?? DURATION;
+}
 
 const easeOut = (p: number) => 1 - (1 - p) ** 3;
 // Past its size and back, the way a sticker lands.
@@ -364,21 +505,82 @@ function bounced(p: number): number {
   return n * (p -= 2.625 / d) * p + 0.984375;
 }
 
-/** A movement `p` of the way through, from 0 (just starting) to 1 (settled), as changes to the settled layer. */
-function moving(way: Entrance, p: number): Partial<Motion> {
+// Springing past its mark and back a few times before it settles.
+function elastic(p: number): number {
+  if (p <= 0) return 0;
+  if (p >= 1) return 1;
+  return 2 ** (-10 * p) * Math.sin((p * 10 - 0.75) * ((2 * Math.PI) / 3)) + 1;
+}
+
+/** The shift a layer starts from to move `direction`, as shares of its size: up starts below, right starts to the left. */
+function startFrom(direction: Direction, distance: number): { dx: number; dy: number } {
+  if (direction === "up") return { dx: 0, dy: distance };
+  if (direction === "down") return { dx: 0, dy: -distance };
+  if (direction === "left") return { dx: distance, dy: 0 };
+  return { dx: -distance, dy: 0 };
+}
+
+const WIPE_FROM: Record<Direction, ClipFrom> = { right: "left", left: "right", down: "top", up: "bottom" };
+
+/** A movement `p` of the way through, from 0 (just starting) to 1 (settled), as changes to the settled layer. Words
+ *  that move one at a time are handed to the painter when `words` says the layer has them. */
+function moving(way: Entrance, p: number, direction: Direction, words: boolean): Partial<Motion> {
   const e = easeOut(p);
+  const from = (distance: number, eased = e) => {
+    const start = startFrom(direction, distance);
+    return { dx: start.dx * (1 - eased), dy: start.dy * (1 - eased) };
+  };
+  if (words && UNIT_WAYS[way]) return { units: { way, p, direction } };
   switch (way) {
     case "fade":
       return { alpha: e };
     case "rise":
-      return { alpha: e, dy: (1 - e) * 0.4 };
+    case "ascend":
     case "pan":
     case "slide":
-      return { alpha: e, dx: (e - 1) * 0.4 };
+    case "shift":
+      return { alpha: e, ...from(0.4) };
     case "pop":
+    case "burst":
       return { alpha: Math.min(1, p * 3), scale: 0.5 + 0.5 * overshoot(p) };
+    case "merge":
+      return { alpha: e, scale: 0.8 + 0.2 * e };
+    case "cascade":
+      return { alpha: e, dy: -(1 - e) * 0.5 };
     case "wipe":
-      return { clip: e };
+      return { clip: e, clipFrom: WIPE_FROM[direction] };
+    case "unfold":
+      return { clip: e, clipFrom: "across" };
+    case "curtain":
+      return { clip: e, clipFrom: "down" };
+    case "iris":
+      return { clip: e, clipFrom: "iris" };
+    case "block":
+      return { alpha: p < 0.5 ? 0 : 1, block: p };
+    case "spread":
+      return { alpha: e, spacing: (1 - e) * 0.45, blur: (1 - e) * 6 };
+    case "clarify":
+      return { alpha: e, blur: (1 - e) * 18, scale: 1.12 - 0.12 * e };
+    case "glide":
+      return { alpha: e, ...from(0.14), blur: (1 - e) * 8 };
+    case "roll":
+      return { alpha: e, ...from(0.9), rotate: (1 - e) * (direction === "left" ? 360 : -360) };
+    case "skate":
+      return { alpha: Math.min(1, p * 3), ...from(0.5, overshoot(p)), rotate: (1 - e) * (direction === "left" ? 8 : -8) };
+    case "elastic":
+      return { alpha: Math.min(1, p * 4), scale: Math.max(0.001, elastic(p)) };
+    case "flip":
+      return { alpha: Math.min(1, p * 2), sx: Math.max(0.001, Math.sin((e * Math.PI) / 2)) };
+    case "fall":
+      return { alpha: e, ...from(0.5), rotate: (1 - e) * 6 };
+    case "tectonic":
+      return { alpha: Math.min(1, p * 4), ...from(0.3, overshoot(p)), rotate: (1 - overshoot(p)) * -4 };
+    case "scrapbook":
+      return { alpha: Math.min(1, p * 3), scale: 0.5 + 0.5 * overshoot(p), rotate: (1 - overshoot(p)) * 18 };
+    case "shine":
+      return { alpha: Math.min(1, p / 0.35), shine: p < 0.35 || p >= 1 ? null : (p - 0.35) / 0.65 };
+    case "grow":
+      return { alpha: Math.min(1, p * 4), growth: e };
     case "blur":
       return { alpha: e, blur: (1 - e) * 24 };
     case "zoom":
@@ -386,9 +588,9 @@ function moving(way: Entrance, p: number): Partial<Motion> {
     case "breathe":
       return { alpha: e, scale: 0.85 + 0.15 * e };
     case "baseline":
-      return { dy: (1 - e) * 1.1, boxed: p < 1 };
+      return { ...from(1.1), boxed: p < 1 };
     case "drift":
-      return { alpha: e, dx: (e - 1) * 0.12 };
+      return { alpha: e, ...from(0.12) };
     case "tumble":
       return { alpha: e, rotate: (1 - e) * -90, scale: 0.6 + 0.4 * e };
     case "stomp":
@@ -404,14 +606,31 @@ function moving(way: Entrance, p: number): Partial<Motion> {
 
 /** A repeating movement `t` seconds after the layer appeared. */
 function looping(loop: Loop, t: number): Partial<Motion> {
-  if (loop === "pulse") return { scale: 1 + 0.04 * Math.sin((2 * Math.PI * t) / 1.2) };
-  if (loop === "wiggle") return { rotate: 4 * Math.sin((2 * Math.PI * t) / 0.6) };
+  const wave = (period: number) => Math.sin((2 * Math.PI * t) / period);
+  if (loop === "pulse") return { scale: 1 + 0.04 * wave(1.2) };
+  if (loop === "wiggle") return { rotate: 4 * wave(0.6) };
   if (loop === "rotate") return { rotate: (t * 90) % 360 };
-  return { dy: 0.03 * Math.sin((2 * Math.PI * t) / 2) };
+  if (loop === "sway") return { rotate: 3 * wave(3.2) };
+  if (loop === "heartbeat") {
+    // Two beats close together, then a rest, the way a heart sounds.
+    const phase = (t % 1.4) / 1.4;
+    const beat = (at: number) => Math.exp(-(((phase - at) / 0.05) ** 2));
+    return { scale: 1 + 0.07 * (beat(0.1) + 0.6 * beat(0.3)) };
+  }
+  if (loop === "shimmer") {
+    // A band of light crosses in the first third of every 3.2 seconds.
+    const phase = (t % 3.2) / 3.2;
+    return { shine: phase < 0.34 ? phase / 0.34 : null };
+  }
+  if (loop === "flash") return { alpha: 0.7 + 0.3 * Math.cos((2 * Math.PI * t) / 1.6) };
+  if (loop === "slowZoom") return { scale: 1 + 0.08 * ((1 - Math.cos((2 * Math.PI * t) / 20)) / 2) };
+  return { dy: 0.03 * wave(2) };
 }
 
-/** Two movements at once: fades and scales multiply, shifts and turns add, the least uncovered wins. */
+/** Two movements at once: fades and scales multiply, shifts and turns add, the least uncovered wins, and the later of
+ *  two sweeps, word movements or bands of light is the one drawn. */
 function combine(a: Motion, b: Partial<Motion>): Motion {
+  const clip = b.clip ?? 1;
   return {
     alpha: a.alpha * (b.alpha ?? 1),
     dx: a.dx + (b.dx ?? 0),
@@ -419,28 +638,42 @@ function combine(a: Motion, b: Partial<Motion>): Motion {
     scale: a.scale * (b.scale ?? 1),
     rotate: a.rotate + (b.rotate ?? 0),
     blur: a.blur + (b.blur ?? 0),
-    clip: Math.min(a.clip, b.clip ?? 1),
+    clip: Math.min(a.clip, clip),
+    clipFrom: clip < a.clip ? b.clipFrom ?? "left" : a.clipFrom,
     reveal: Math.min(a.reveal, b.reveal ?? 1),
     boxed: a.boxed || (b.boxed ?? false),
+    sx: a.sx * (b.sx ?? 1),
+    block: b.block ?? a.block,
+    units: b.units ?? a.units,
+    spacing: a.spacing + (b.spacing ?? 0),
+    shine: b.shine ?? a.shine,
+    growth: Math.min(a.growth, b.growth ?? 1),
   };
 }
+
+const OPPOSITE: Record<Direction, Direction> = { up: "down", down: "up", left: "right", right: "left" };
+// The layers whose words the painter can move one at a time.
+const WORDED = new Set<LayerKind>(["text", "title", "name", "handle", "links", "time"]);
 
 /**
  * A layer at `time` seconds into a clip `length` seconds long. While the clip plays it shows only between its times,
  * coming in, going and moving in its own ways; a layer with no end of its own goes as the clip ends. While it is
  * edited every layer is shown as it ends up, faint when the playhead is outside its times. Null means it isn't drawn.
  */
-export function motionAt(layer: Pick<Layer, "enter" | "exit" | "loop" | "speed" | "from" | "until">, time: number, playing: boolean, length = Infinity): Motion | null {
+export function motionAt(layer: Pick<Layer, "enter" | "exit" | "loop" | "speed" | "from" | "until" | "direction"> & { kind?: LayerKind }, time: number, playing: boolean, length = Infinity): Motion | null {
   const from = layer.from ?? 0;
   const until = layer.until ?? length;
   const inside = time >= from && time <= until;
   if (!playing) return inside ? SETTLED : { ...SETTLED, alpha: 0.3 };
   if (!inside) return null;
   const speed = Math.min(4, Math.max(0.25, layer.speed ?? 1));
-  const span = (way: Entrance) => (DURATIONS[way] ?? DURATION) / speed;
+  const span = (way: Entrance) => entranceLength(way) / speed;
+  const words = layer.kind !== undefined && WORDED.has(layer.kind);
+  const direction = (way: Entrance) => layer.direction ?? DIRECTED[way] ?? "up";
   let motion = SETTLED;
-  if (layer.enter) motion = combine(motion, moving(layer.enter, Math.min(1, Math.max(0, (time - from) / span(layer.enter)))));
-  if (layer.exit && Number.isFinite(until)) motion = combine(motion, moving(layer.exit, Math.min(1, Math.max(0, (until - time) / span(layer.exit)))));
+  if (layer.enter) motion = combine(motion, moving(layer.enter, Math.min(1, Math.max(0, (time - from) / span(layer.enter))), direction(layer.enter), words));
+  // Going plays the way in backwards and turned round, so a layer that rose in carries on up and out.
+  if (layer.exit && Number.isFinite(until) && until - time < span(layer.exit)) motion = combine(motion, moving(layer.exit, Math.min(1, Math.max(0, (until - time) / span(layer.exit))), OPPOSITE[direction(layer.exit)], words));
   if (layer.loop) motion = combine(motion, looping(layer.loop, (time - from) * speed));
   return motion;
 }

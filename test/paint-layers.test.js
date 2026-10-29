@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Painter, textHeight, THEMES } from "../dist/render.js";
+import { Painter, textHeight, textWidth, THEMES } from "../dist/render.js";
 import { defaultLayers } from "../dist/layers.js";
 
 // Paths as the canvas takes them, so graphics can be drawn outside a browser.
@@ -20,6 +20,7 @@ function canvasLog(width, height) {
     restore: () => Object.assign(state, stack.pop()),
     measureText: (text) => ({ width: text.length * (Number(state.font.match(/(\d+(?:\.\d+)?)px/)?.[1]) || 10) * 0.5 }),
     createLinearGradient: () => ({ addColorStop: (at, color) => calls.push({ op: "addColorStop", at, color }) }),
+    createRadialGradient: () => ({ addColorStop: (at, color) => calls.push({ op: "addColorStop", at, color }) }),
     fillText: (text, x, y) => calls.push({ op: "fillText", text, x, y, ...state }),
     drawImage: (image, ...rect) => calls.push({ op: "drawImage", image, rect, ...state }),
   };
@@ -273,6 +274,7 @@ test("a frame clips its picture to a shape, and an empty frame shows a placehold
   const editing = canvasLog(1000, 1000);
   const painter = new Painter(scene({ layers: [empty] }));
   painter.animate = false;
+  painter.placeholders = true;
   painter.paint(editing.ctx, 0);
   const playing = canvasLog(1000, 1000);
   new Painter(scene({ layers: [empty] })).paint(playing.ctx, 0);
@@ -347,4 +349,59 @@ test("spaced-out words are centred on their letters, not on the space after the 
   new Painter(scene({ layers: [{ ...layer, letterSpacing: 500 }] })).paint(spaced.ctx, 0);
   const x = (calls) => calls.find((call) => call.op === "fillText" && call.text === "Hi").x;
   assert.ok(Math.abs(x(spaced.calls) - x(plain.calls) - 15) < 1e-6, `moved by half of 30 px: ${x(spaced.calls) - x(plain.calls)}`);
+});
+
+test("words in a box that hugs them break only where a line was typed, and the box is as wide as the longest line", () => {
+  const layer = { id: "t", kind: "text", text: "A long line that would wrap\nShort", autoWidth: true, x: 0, y: 0, w: 0.1, h: 0.1, rotation: 0, opacity: 1, size: 40 };
+  const log = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [layer] })).paint(log.ctx, 0);
+  const lines = log.calls.filter((call) => call.op === "fillText").map((call) => call.text);
+  assert.deepEqual(lines, ["A long line that would wrap", "Short"]);
+  // measureText in the log runs half the size a letter; 40 design pixels are 37 on a 1000 px frame.
+  assert.ok(Math.abs(textWidth(log.ctx, layer, layer.text, "Geist", 1000, 1000) - (27 * 37 * 0.5) / 1000) < 1e-9);
+  assert.ok(Math.abs(textHeight(log.ctx, layer, layer.text, "Geist", 1000, 1000) - (2 * 40 * (1000 / 1080) * 1.15) / 1000) < 1e-9, "two typed lines tall");
+});
+
+test("a captions layer shows sample words while the picture is edited, and nothing in the video", () => {
+  const layer = { id: "c", kind: "captions", x: 0.1, y: 0.4, w: 0.8, h: 0.3, rotation: 0, opacity: 1 };
+  const editing = canvasLog(1000, 1000);
+  const painter = new Painter(scene({ layers: [layer] }));
+  painter.animate = false;
+  painter.placeholders = true;
+  painter.captionsSample = "Captions show here";
+  painter.paint(editing.ctx, 0);
+  assert.ok(editing.calls.some((call) => call.op === "fillText" && call.text === "Captions"), "the sample's words");
+  assert.ok(editing.calls.filter((call) => call.op === "fillText").every((call) => call.fillStyle === THEMES[0].muted), "unsaid, so muted");
+  const playing = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [layer] })).paint(playing.ctx, 0);
+  assert.ok(!playing.calls.some((call) => call.op === "fillText"));
+});
+
+test("words that ascend move one at a time, the first ahead of the last", () => {
+  const layer = { id: "t", kind: "text", text: "One two three", x: 0, y: 0, w: 1, h: 0.2, rotation: 0, opacity: 1, size: 40, enter: "ascend" };
+  const log = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [layer] })).paint(log.ctx, 0.8);
+  const words = log.calls.filter((call) => call.op === "fillText");
+  assert.deepEqual(words.map((call) => call.text), ["One", "two", "three"]);
+  assert.ok(words[0].globalAlpha > words[2].globalAlpha, `${words.map((call) => call.globalAlpha)}`);
+});
+
+test("a metal colour is laid on as a gradient across the layer", () => {
+  const layer = { id: "s", kind: "shape", shape: "rect", fill: "metal:gold", x: 0, y: 0, w: 0.5, h: 0.5, rotation: 0, opacity: 1 };
+  const log = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [layer] })).paint(log.ctx, 0);
+  assert.ok(log.calls.filter((call) => call.op === "addColorStop").length >= 5, "the gold's stops");
+});
+
+test("a layer being shown once moves while the rest of the picture stays still", () => {
+  const moving = { id: "a", kind: "text", text: "Hi", x: 0, y: 0, w: 0.5, h: 0.1, rotation: 0, opacity: 1, enter: "fade" };
+  const still = { ...moving, id: "b", text: "There" };
+  const log = canvasLog(1000, 1000);
+  const painter = new Painter(scene({ layers: [moving, still] }));
+  painter.animate = false;
+  painter.rehearse = { ids: new Set(["a"]), part: "enter", at: 0.1 };
+  painter.paint(log.ctx, 3);
+  const alpha = (text) => log.calls.find((call) => call.op === "fillText" && call.text === text).globalAlpha;
+  assert.ok(alpha("Hi") < 0.9, `fading in: ${alpha("Hi")}`);
+  assert.equal(alpha("There"), 1);
 });

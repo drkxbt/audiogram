@@ -250,7 +250,8 @@ test("a track longer than 32 bits of its timescale keeps its whole duration", ()
 // A 2D context that accepts every call and records nothing, so the painter runs outside a browser.
 function fakeContext(width, height) {
   const any = new Proxy(function () {}, { get: (_, key) => (key === "width" ? 0 : any), apply: () => any, set: () => true });
-  return new Proxy({}, { get: (_, key) => (key === "canvas" ? { width, height } : any), set: () => true });
+  // Numbers where a real canvas has them, so sums on the current alpha work.
+  return new Proxy({}, { get: (_, key) => (key === "canvas" ? { width, height } : key === "globalAlpha" ? 1 : any), set: () => true });
 }
 
 const sceneFor = (overlay) => ({
@@ -282,6 +283,7 @@ function recordingContext(width, height) {
   const ctx = new Proxy({}, {
     get: (_, key) => {
       if (key === "canvas") return { width, height };
+      if (key === "globalAlpha") return 1;
       if (key === "drawImage") return (image, ...rect) => calls.push({ op: "drawImage", image, rect });
       if (key === "fillText") return (text, x, y) => calls.push({ op: "fillText", text, x, y });
       return any;

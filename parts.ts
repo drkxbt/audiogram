@@ -29,11 +29,26 @@ export function recordingTimeAt(parts: Parts, time: number): number {
 }
 
 /**
+ * The parts run together where one carries straight on from the one before it, as the two halves of a split do, so
+ * nothing marks a join that was never a cut.
+ */
+function runs(parts: Parts): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  for (const [start, end] of parts) {
+    const last = out.at(-1);
+    if (last && last[1] === start) last[1] = end;
+    else out.push([start, end]);
+  }
+  return out;
+}
+
+/**
  * The parts' sound end to end. Each join fades out and back in over `fade` seconds, so a cut mid-word doesn't click;
- * the clip's own start and end are left as they are.
+ * a part that carries straight on from the one before it plays on without one, and the clip's own start and end are
+ * left as they are.
  */
 export function stitch(samples: Float32Array, sampleRate: number, parts: Parts, fade = 0.15): Float32Array {
-  return joinParts(parts.map(([start, end]) => samples.subarray(Math.max(0, Math.round(start * sampleRate)), Math.min(samples.length, Math.round(end * sampleRate)))), sampleRate, fade);
+  return joinParts(runs(parts).map(([start, end]) => samples.subarray(Math.max(0, Math.round(start * sampleRate)), Math.min(samples.length, Math.round(end * sampleRate)))), sampleRate, fade);
 }
 
 /** Pieces of sound end to end, each join faded out and back in over `fade` seconds; the ends are left as they are. */
@@ -55,9 +70,32 @@ export function joinParts(pieces: Float32Array[], sampleRate: number, fade = 0.1
 /** Reads one channel of a recording from `start` to `end` seconds at `sampleRate`, the way an AudioSource does. */
 export type Reader = (start: number, end: number, sampleRate: number) => Promise<Float32Array>;
 
+/** Recordings laid end to end on one timeline: each starts `offset` seconds in, lasts `duration`, and reads in its own time. */
+export type Reel = ReadonlyArray<{ readonly offset: number; readonly duration: number; readonly read: Reader }>;
+
+/**
+ * One channel of the reel from `start` to `end` seconds at `sampleRate`: each recording under that stretch read in its
+ * own time and put where it sits, with silence where no recording is.
+ */
+export async function readReel(reel: Reel, start: number, end: number, sampleRate: number): Promise<Float32Array> {
+  // Counted in whole samples from the reel's start, so recordings end to end meet without a gap or an overlap.
+  const first = Math.round(start * sampleRate);
+  const out = new Float32Array(Math.max(0, Math.round(end * sampleRate) - first));
+  const last = first + out.length;
+  for (const { offset, duration, read } of reel) {
+    const head = Math.round(offset * sampleRate);
+    const lo = Math.max(first, head);
+    const hi = Math.min(last, Math.round((offset + duration) * sampleRate));
+    if (hi <= lo) continue;
+    const piece = await read((lo - head) / sampleRate, (hi - head) / sampleRate, sampleRate);
+    out.set(piece.subarray(0, hi - lo), lo - first);
+  }
+  return out;
+}
+
 /**
  * The clip's sound from `from` to `to` seconds into it, read from just the parts of the recording under that window,
- * and the same, sample for sample, as that stretch of the parts joined whole with `joinParts`. A long clip is read this
+ * and the same, sample for sample, as that stretch of the parts joined whole with `stitch`. A long clip is read this
  * way a window at a time, so it never has to be held in memory at once; past either end of the clip is silence.
  */
 export async function readClip(read: Reader, parts: Parts, from: number, to: number, sampleRate: number, fade = 0.15): Promise<Float32Array> {
@@ -65,8 +103,9 @@ export async function readClip(read: Reader, parts: Parts, from: number, to: num
   const first = Math.round(from * sampleRate);
   const out = new Float32Array(Math.max(0, Math.round(to * sampleRate) - first));
   const last = first + out.length;
+  const list = runs(parts);
   let at = 0;
-  for (const [index, [start, end]] of parts.entries()) {
+  for (const [index, [start, end]] of list.entries()) {
     const head = Math.round(start * sampleRate);
     const length = Math.max(0, Math.round(end * sampleRate) - head);
     const lo = Math.max(first, at);
@@ -78,7 +117,7 @@ export async function readClip(read: Reader, parts: Parts, from: number, to: num
         const into = lo - at + i;
         let gain = 1;
         if (index > 0 && into < ramp) gain *= into / ramp;
-        if (index < parts.length - 1 && length - 1 - into < ramp) gain *= (length - 1 - into) / ramp;
+        if (index < list.length - 1 && length - 1 - into < ramp) gain *= (length - 1 - into) / ramp;
         out[lo - first + i] = piece[i] * gain;
       }
     }
