@@ -311,3 +311,21 @@ test("a ring in a box much wider than it is tall is drawn as a row of dots light
   const lit = dots.filter((dot) => dot.alpha >= 0.7).length;
   assert.equal(lit, Math.floor(dots.length / 4), "a quarter of the way through, a quarter of the dots");
 });
+
+test("painters handed one store of scratch canvases reuse them, so a redraw for every drag move makes none", (t) => {
+  t.after(() => delete globalThis.OffscreenCanvas);
+  const log = [];
+  const made = offscreen(log, true);
+  const store = new Map();
+  for (let i = 0; i < 3; i++) {
+    const painter = new Painter(scene({ layers: [photo, card] }));
+    painter.scratches = store;
+    painter.paint(recorder({ width: 1080, height: 1080 }, log, true), 1);
+  }
+  const first = new Painter(scene({ layers: [photo, card] }));
+  first.scratches = new Map();
+  const before = made.length;
+  first.paint(recorder({ width: 1080, height: 1080 }, log, true), 1);
+  assert.ok(made.length > before, "a painter with a store of its own makes its canvases");
+  assert.ok(before <= 3, `three painters sharing a store made only the first one's canvases: ${before}`);
+});

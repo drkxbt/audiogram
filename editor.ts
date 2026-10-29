@@ -1623,7 +1623,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     audio: sceneAudio(),
   });
 
+  // One store of scratch canvases for every painter the stage gets, since a drag makes a new one at each move.
+  const scratches: Painter["scratches"] = new Map();
   let painter = new Painter(scene());
+  painter.scratches = scratches;
   const ctx = preview.getContext("2d", { alpha: false })!;
   const stage = createStage({
     stage: stageArea,
@@ -1802,6 +1805,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   function rebuild() {
     placeCaptions();
     painter = new Painter(scene());
+    painter.scratches = scratches;
     painter.animate = animating;
     painter.placeholders = true;
     painter.placeholderText = labels.dropPhoto;
@@ -3466,6 +3470,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     tapIndex++;
     showTapHint();
     painter = new Painter(scene());
+    painter.scratches = scratches;
     renderCues();
   }
 

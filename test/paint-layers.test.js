@@ -446,3 +446,21 @@ test("a moving picture shows the frame for the clip's time, counted from when it
   assert.equal(drawn(1.25), "c");
   assert.equal(drawn(1.35), "a", "back to the start");
 });
+
+test("at the sample point (a template's picture, or no clip yet) the sample is part said: words said, one marked, the rest to come", () => {
+  const layer = { id: "c", kind: "captions", x: 0.1, y: 0.4, w: 0.8, h: 0.3, rotation: 0, opacity: 1, color: "#ffffff", highlight: "#ffcc00" };
+  const log = canvasLog(1000, 1000);
+  const painter = new Painter(scene({ layers: [layer] }));
+  painter.animate = false;
+  painter.placeholders = true;
+  painter.sampleProgress = true;
+  painter.captionsSample = "We spent two years building this";
+  painter.paint(log.ctx, 0);
+  const words = log.calls.filter((call) => call.op === "fillText");
+  assert.equal(words.length, 6);
+  const marked = words.findIndex((call) => call.fillStyle !== "#ffffff");
+  assert.ok(marked > 0 && marked < 5, `one word in the middle is marked: ${marked}`);
+  assert.ok(words.slice(0, marked).every((call) => call.globalAlpha === 1), "the words before it are said");
+  assert.ok(words.slice(marked + 1).every((call) => call.globalAlpha === 0.5), "the words after it are still to come");
+  assert.ok(log.calls.some((call) => call.op === "fill" && call.fillStyle === "#ffcc00"), "the mark is drawn in the highlight");
+});

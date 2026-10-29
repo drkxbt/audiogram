@@ -854,7 +854,9 @@ export class Painter {
     return { ...this.shine, spare, width, height };
   }
 
-  private scratches = new Map<string, { canvas: HTMLCanvasElement | OffscreenCanvas; ctx: CanvasRenderingContext2D }>();
+  /** The canvases glass and shadows draw through, kept between frames. A host that makes a new painter for every change
+   *  (each step of a drag) hands them all one store, so they reuse these instead of making new ones each time. */
+  scratches = new Map<string, { canvas: HTMLCanvasElement | OffscreenCanvas; ctx: CanvasRenderingContext2D }>();
 
   /** A canvas kept between frames under `name`, at least `width` by `height`, cleared and set back to plain drawing;
    *  null where none can be made. */
@@ -1577,6 +1579,10 @@ export class Painter {
     const top = area.y + (area.height - shown.length * lineHeight) / 2 + lineHeight / 2;
     const align = layer.align ?? "center";
     const wordStyle = { ...layer, background: undefined };
+    // At the sample point (a template's picture, or no clip yet) the sample is part said, so a design shows its marked
+    // word and its said words as an export would, not every word faded.
+    const marked = sample && this.sampleProgress ? Math.floor(words.length * 0.45) : -1;
+    let counted = 0;
     shown.forEach((line, row) => {
       const total = line.reduce((sum, word) => sum + word.width, 0) + space * (line.length - 1);
       let x = align === "left" ? area.x : align === "right" ? area.x + area.width - total : area.x + (area.width - total) / 2;
@@ -1588,8 +1594,9 @@ export class Painter {
         ctx.fill();
       }
       for (const word of line) {
-        const done = !sample && time >= word.end;
-        const saying = !sample && time >= word.start && time < word.end;
+        const done = sample ? counted < marked : time >= word.end;
+        const saying = sample ? counted === marked : time >= word.start && time < word.end;
+        counted++;
         if (saying) {
           ctx.fillStyle = highlight;
           roundRect(ctx, x - size * 0.1, y - size * 0.62, word.width + size * 0.2, size * 1.24, 10 * unit);
