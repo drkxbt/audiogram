@@ -2,7 +2,7 @@ import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, spread, t
 import { exportClip, type ExportResult } from "./export.js";
 import { clipTimeAt, partsLength, readClip, readReel, stitchCues, type Reel } from "./parts.js";
 import { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
-import { Painter, SIZES, THEMES, type Layout, type Overlay, type Page, type Scene, type Theme, type Visual } from "./render.js";
+import { Painter, SIZES, THEMES, type Animation, type Layout, type Overlay, type Page, type Scene, type Theme, type Visual } from "./render.js";
 import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
 import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
 import { colourPanel, COLOUR_LABELS, documentColours, hexToHsv, markPicked, type ColourChoice } from "./colour.js";
@@ -10,7 +10,7 @@ import { initialView, outlineBars, panView, showSpan, zoomView, type View } from
 import { backgroundOf, defaultLayers, entranceLength, isBackgroundLayer, moveLayer, showCaptions, stacked, widthAnchored, type Layer, type LayerKind } from "./layers.js";
 import { createStage, type FontChoice, type StageLabels } from "./stage.js";
 import { textHeight, textWidth } from "./render.js";
-import { elementTiles, searchTiles, SECTIONS, type ElementTile, type SectionId } from "./elements.js";
+import { elementTiles, searchTiles, type ElementTile, type SectionId } from "./elements.js";
 import { DEVICES } from "./paint-mockup.js";
 
 export type Tab = "design" | "elements" | "text" | "photos" | "music" | "captions" | "layers";
@@ -114,7 +114,13 @@ export interface Labels {
   grids: string;
   gridNames: { across: string; down: string; three: string; four: string };
   nothingFound: string;
-  sectionNames: Record<SectionId | "recent" | "photos", string>;
+  sectionNames: Record<SectionId | "recent" | "photos" | "illustrations" | "stickers" | "gifs" | "logos", string>;
+  mediaSource: string;
+  loadMore: string;
+  loadingLibrary: string;
+  mediaUnavailable: string;
+  mediaFailed: string;
+  mediaBy: (author: string, source: string) => string;
   seeAll: string;
   seeAllOf: (section: string) => string;
   backToElements: string;
@@ -187,9 +193,51 @@ export interface StockPhoto {
   credit?: string;
 }
 
-/** Free photos a page offers for the picture. */
+/** The kinds of stock media a source can offer. */
+export type MediaKind = "photo" | "illustration" | "video" | "sticker" | "gif";
+
+/** One result from a stock source: a preview for the panel and the file to keep, with who made it. */
+export interface MediaItem {
+  id: string;
+  kind: MediaKind;
+  name: string;
+  thumb: string;
+  file: string;
+  width: number;
+  height: number;
+  credit?: { name: string; url: string };
+  link?: string;
+}
+
+export interface MediaPage {
+  items: MediaItem[];
+  more: boolean;
+}
+
+/** A stock source for one kind of media: its name, the line that credits it, and a search; an empty query asks for
+ *  what is popular. */
+export interface MediaFeed {
+  kind: MediaKind;
+  source: string;
+  name: string;
+  credit: string;
+  url: string;
+  search(query: string, page: number): Promise<MediaPage>;
+}
+
+/** A brand's logo, drawn in a 24 by 24 box, and its colour. */
+export interface Logo {
+  id: string;
+  name: string;
+  hex: string;
+  path: string;
+}
+
+/** Free photos a page offers for the picture, stock sources to search, and logos to load when they are first shown. */
 export interface Library {
   photos?: StockPhoto[];
+  media?: MediaFeed[];
+  logos?: () => Promise<{ featured: string[]; logos: Logo[] }>;
 }
 
 export interface EditorOptions {
@@ -602,7 +650,13 @@ const DEFAULT_LABELS: Labels = {
   grids: "Photo grids",
   gridNames: { across: "Two across", down: "Two down", three: "Three across", four: "Four" },
   nothingFound: "Nothing matches that. Try a shorter word.",
-  sectionNames: { recent: "Recently used", audio: "Sound and captions", shapes: "Shapes", lines: "Lines", frames: "Photo frames", grids: "Photo grids", photos: "Photos", videos: "Moving backgrounds", charts: "Charts", tables: "Tables", mockups: "Mockups", solids: "3D shapes" },
+  sectionNames: { recent: "Recently used", audio: "Sound and captions", shapes: "Shapes", lines: "Lines", frames: "Photo frames", grids: "Photo grids", photos: "Photos", illustrations: "Illustrations", videos: "Videos", stickers: "Stickers", gifs: "GIFs", logos: "Social logos", charts: "Charts", tables: "Tables", mockups: "Mockups", solids: "3D shapes" },
+  mediaSource: "Source",
+  loadMore: "Load more",
+  loadingLibrary: "Loading…",
+  mediaUnavailable: "This library isn't available right now.",
+  mediaFailed: "That one didn't come through. Try another, or try again in a moment.",
+  mediaBy: (author, source) => `By ${author} on ${source}`,
   seeAll: "See all",
   seeAllOf: (section) => `See all ${section.toLowerCase()}`,
   backToElements: "All elements",
@@ -704,6 +758,45 @@ async function loadVideo(source: string | Blob): Promise<HTMLVideoElement> {
   video.src = typeof source === "string" ? source : URL.createObjectURL(source);
   await loaded;
   return video;
+}
+
+// The browser's image decoder, where it has one, as much of it as moving pictures need.
+interface FrameDecoder {
+  tracks: { ready: Promise<void>; selectedTrack: { animated: boolean; frameCount: number } | null };
+  decode(options: { frameIndex: number }): Promise<{ image: VideoFrame }>;
+  close(): void;
+}
+type FrameDecoderClass = new (init: { data: ArrayBuffer; type: string }) => FrameDecoder;
+
+/** A moving GIF, WebP or PNG as frames and their times, at most 150 frames no wider than 640 px; null for a still
+ *  picture, or where the browser can't decode one a frame at a time, which then shows its first frame. */
+async function decodeAnimation(blob: Blob): Promise<Animation | null> {
+  const Decoder = (globalThis as { ImageDecoder?: FrameDecoderClass }).ImageDecoder;
+  if (!Decoder || !/^image\/(gif|webp|png|apng)$/.test(blob.type)) return null;
+  let decoder: FrameDecoder | null = null;
+  try {
+    decoder = new Decoder({ data: await blob.arrayBuffer(), type: blob.type });
+    await decoder.tracks.ready;
+    const track = decoder.tracks.selectedTrack;
+    if (!track?.animated || track.frameCount < 2) return null;
+    const frames: CanvasImageSource[] = [];
+    const ends: number[] = [];
+    let at = 0;
+    for (let index = 0; index < Math.min(150, track.frameCount); index++) {
+      const { image } = await decoder.decode({ frameIndex: index });
+      const scale = Math.min(1, 640 / Math.max(1, image.displayWidth));
+      frames.push(await createImageBitmap(image, { resizeWidth: Math.round(image.displayWidth * scale), resizeHeight: Math.round(image.displayHeight * scale) }));
+      // A frame with no time of its own shows for a tenth of a second, as browsers play them.
+      at += (image.duration || 100_000) / 1e6;
+      ends.push(at);
+      image.close();
+    }
+    return { frames, ends };
+  } catch {
+    return null;
+  } finally {
+    decoder?.close();
+  }
 }
 
 async function loadImage(source: string | Blob): Promise<HTMLImageElement> {
@@ -825,7 +918,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let designs: Partial<Record<Layout, Layer[]>> = Object.fromEntries(LAYOUTS.filter((name) => options.layers?.[name] || options.blank).map((name) => [name, (options.layers?.[name] ?? []).map((layer) => ({ ...layer }))]));
   const layersFor = (shape: Layout) => designs[shape] ?? defaultLayers(shape);
   // Uploaded pictures by key, as given and as drawn; `listed` ones show in the Photos panel.
-  const pictures = new Map<string, { source: Blob | string; image: HTMLImageElement | null; video: HTMLVideoElement | null; url: string | null; listed: boolean }>();
+  const pictures = new Map<string, { source: Blob | string; image: HTMLImageElement | null; video: HTMLVideoElement | null; url: string | null; listed: boolean; animation?: Animation | null }>();
   let editingLayer: string | null = null;
   let fontList: FontChoice[] = options.fonts ?? [];
   let hostTemplates: TemplateChoice[] = options.templates ?? [];
@@ -1480,6 +1573,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     links,
     layers: layersFor(layout).map((layer) => (layer.id === editingLayer ? { ...layer, hidden: true } : layer)),
     images: new Map([...pictures].flatMap(([key, picture]): Array<[string, CanvasImageSource]> => (picture.image ? [[key, picture.image]] : picture.video ? [[key, picture.video]] : []))),
+    animations: new Map([...pictures].flatMap(([key, picture]): Array<[string, Animation]> => (picture.animation ? [[key, picture.animation]] : []))),
     page,
     music: music ? { samples: music.samples, gain: musicVolume } : null,
     captions: paginate(parts.length ? stitchCues(cues, parts) : clip(cues, range[0], range[1]), pageLength(layout)),
@@ -1987,17 +2081,63 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // section whole, and the search looks through every one. What was added lately comes first.
   const allTiles = elementTiles(labels.elementNames);
   let recent: string[] = (options.recent ?? []).filter((tileId) => allTiles.some((tile) => tile.id === tileId)).slice(0, 8);
-  let openSection: SectionId | "recent" | null = null;
-  const ROW: Partial<Record<SectionId | "recent", number>> = { shapes: 8 };
+  // Stock media from the host's sources, a kind to a section, and logos. What a source shows is fetched once a query
+  // and page, and kept for the visit.
+  type MediaSection = "photos" | "illustrations" | "videos" | "stickers" | "gifs";
+  type PanelView = SectionId | "recent" | MediaSection | "logos";
+  const MEDIA_KIND: Record<MediaSection, MediaKind> = { photos: "photo", illustrations: "illustration", videos: "video", stickers: "sticker", gifs: "gif" };
+  const isMedia = (view: PanelView): view is MediaSection => view in MEDIA_KIND;
+  let openSection: PanelView | null = null;
+  // In a section opened whole: which of its sources shows, and how many pages of it.
+  let openFeed = 0;
+  let openPages = 1;
+  const ROW: Partial<Record<PanelView, number>> = { shapes: 8 };
+  const feedsFor = (section: MediaSection) => (library.media ?? []).filter((feed) => feed.kind === MEDIA_KIND[section]);
+  const mediaCache = new Map<string, Promise<MediaPage>>();
+  function mediaPage(feed: MediaFeed, query: string, page: number): Promise<MediaPage> {
+    const key = `${feed.source}|${feed.kind}|${query}|${page}`;
+    let found = mediaCache.get(key);
+    if (!found) {
+      found = feed.search(query, page);
+      mediaCache.set(key, found);
+      // A failed page is asked for again next time rather than remembered.
+      found.catch(() => mediaCache.delete(key));
+    }
+    return found;
+  }
+  let logoSet: { featured: string[]; logos: Logo[] } | null = null;
+  let logosAsked = false;
+  function loadLogos() {
+    if (logosAsked || !library.logos) return;
+    logosAsked = true;
+    void library.logos().then((set) => (logoSet = set), () => (logoSet = { featured: [], logos: [] })).then(() => {
+      if (tab === "elements") renderElements();
+    });
+  }
+  const logosMatching = (query: string) => {
+    if (!logoSet) return [];
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+    if (!words.length) {
+      const first = logoSet.featured.map((id) => logoSet!.logos.find((logo) => logo.id === id)).filter((logo): logo is Logo => Boolean(logo));
+      return [...first, ...logoSet.logos.filter((logo) => !logoSet!.featured.includes(logo.id))];
+    }
+    return logoSet.logos.filter((logo) => words.every((word) => logo.name.toLowerCase().split(/[^a-z0-9]+/).some((part) => part.startsWith(word)) || logo.id.startsWith(word)));
+  };
 
   function renderElements() {
     const query = elementSearch.value.trim();
+    loadLogos();
     const grid = (tiles: ElementTile[]) => {
       const node = element("div", "ag-el-grid");
       node.append(...tiles.map(elementTile));
       return node;
     };
-    const head = (name: string, section: SectionId | "recent" | "photos", more: boolean) => {
+    const help = (text: string) => {
+      const node = element("p", "ag-help");
+      node.textContent = text;
+      return node;
+    };
+    const head = (name: string, section: PanelView | "photos-tab", more: boolean) => {
       const row = element("div", "ag-el-head");
       const title = element("h3", "ag-heading");
       title.textContent = name;
@@ -2006,8 +2146,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         const all = keyButton("ag-el-all", labels.seeAll, ICONS.next);
         all.setAttribute("aria-label", labels.seeAllOf(name));
         all.addEventListener("click", () => {
-          if (section === "photos") return selectTab("photos");
+          if (section === "photos-tab") return selectTab("photos");
           openSection = section;
+          openFeed = 0;
+          openPages = 1;
           renderElements();
           elementsBody.querySelector<HTMLElement>(".ag-el-back")?.focus();
         });
@@ -2015,15 +2157,46 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       }
       return row;
     };
+    // Each source shown is credited under its results, linked to it, as the sources ask.
+    const credits = (feeds: MediaFeed[]) => {
+      const line = element("p", "ag-el-credit");
+      feeds.forEach((feed, index) => {
+        const link = element("a", "");
+        link.href = feed.url;
+        link.target = "_blank";
+        link.rel = "noopener";
+        link.textContent = feed.credit;
+        line.append(...(index ? [" · ", link] : [link]));
+      });
+      return line;
+    };
+    const logoGrid = (logos: Logo[]) => {
+      const node = element("div", "ag-el-grid");
+      node.append(...logos.map(logoTile));
+      return node;
+    };
+    /** A section of stock media: the first results of its first source, then the credits. */
+    const mediaBlock = (section: MediaSection, extra: HTMLElement[] = []) => {
+      const feeds = feedsFor(section);
+      const block = element("section", "ag-el-section");
+      block.dataset.section = section;
+      block.append(head(labels.sectionNames[section], section, Boolean(feeds.length) || extra.length > 0), ...extra);
+      if (feeds.length) block.append(mediaGrid(feeds[0], query, 1, query ? 8 : 4), credits(feeds));
+      return block;
+    };
     const parts: HTMLElement[] = [];
-    if (query) {
+    if (query && !openSection) {
       const found = searchTiles(allTiles, query);
       if (found.length) parts.push(grid(found));
-      else {
-        const nothing = element("p", "ag-help");
-        nothing.textContent = labels.nothingFound;
-        parts.push(nothing);
+      for (const section of Object.keys(MEDIA_KIND) as MediaSection[]) if (feedsFor(section).length) parts.push(mediaBlock(section));
+      const logos = logosMatching(query);
+      if (logos.length) {
+        const block = element("section", "ag-el-section");
+        block.dataset.section = "logos";
+        block.append(head(labels.sectionNames.logos, "logos", logos.length > 8), logoGrid(logos.slice(0, 8)));
+        parts.push(block);
       }
+      if (!parts.length) parts.push(help(labels.nothingFound));
     } else if (openSection) {
       const back = keyButton("ag-el-back", labels.backToElements, ICONS.previous);
       back.addEventListener("click", () => {
@@ -2032,50 +2205,208 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         renderElements();
         elementsBody.querySelector<HTMLElement>(`[data-section="${was}"] .ag-el-all`)?.focus();
       });
-      const tiles = openSection === "recent" ? recentTiles() : allTiles.filter((tile) => tile.section === openSection);
       const name = element("h3", "ag-heading");
       name.textContent = labels.sectionNames[openSection];
-      parts.push(back, name, grid(tiles));
-      if (openSection === "videos") parts.push(uploadVideoTile());
+      parts.push(back, name);
+      if (openSection === "logos") {
+        const logos = logosMatching(query);
+        parts.push(logoGrid(logos.slice(0, openPages * 120)));
+        if (!logoSet) parts.push(help(labels.loadingLibrary));
+        if (logos.length > openPages * 120) parts.push(moreKey());
+      } else {
+        const tiles = openSection === "recent" ? recentTiles() : allTiles.filter((tile) => tile.section === openSection);
+        const shownTiles = query ? searchTiles(tiles, query) : tiles;
+        if (shownTiles.length) parts.push(grid(shownTiles));
+        if (openSection === "videos") parts.push(uploadVideoTile());
+        if (isMedia(openSection)) {
+          const feeds = feedsFor(openSection);
+          if (feeds.length > 1) {
+            // One source at a time, picked from a row of keys.
+            const row = element("div", "ag-chips ag-el-sources");
+            row.setAttribute("role", "radiogroup");
+            row.setAttribute("aria-label", labels.mediaSource);
+            feeds.forEach((feed, index) => {
+              const chip = element("button", "ag-key ag-chip");
+              chip.type = "button";
+              chip.setAttribute("role", "radio");
+              chip.setAttribute("aria-checked", String(index === openFeed));
+              chip.textContent = feed.name;
+              chip.addEventListener("click", () => {
+                openFeed = index;
+                openPages = 1;
+                renderElements();
+                elementsBody.querySelector<HTMLElement>(".ag-el-sources [aria-checked=true]")?.focus();
+              });
+              row.append(chip);
+            });
+            parts.push(row);
+          }
+          const feed = feeds[Math.min(openFeed, feeds.length - 1)];
+          if (feed) parts.push(mediaGrid(feed, query, openPages, undefined, true), credits([feed]));
+        }
+      }
     } else {
-      const sections: Array<SectionId | "recent"> = [...(recent.length ? ["recent" as const] : []), ...SECTIONS];
-      for (const section of sections) {
+      const order: PanelView[] = [...(recent.length ? ["recent" as const] : []), "audio", "shapes", "lines", "frames", "grids", "photos", "illustrations", "videos", "stickers", "gifs", "logos", "charts", "tables", "mockups", "solids"];
+      for (const section of order) {
+        if (section === "logos") {
+          if (!library.logos) continue;
+          const block = element("section", "ag-el-section");
+          block.dataset.section = "logos";
+          block.append(head(labels.sectionNames.logos, "logos", true), logoSet ? logoGrid(logosMatching("").slice(0, 8)) : help(labels.loadingLibrary));
+          parts.push(block);
+          continue;
+        }
+        if (section === "videos") {
+          const tiles = allTiles.filter((tile) => tile.section === "videos");
+          parts.push(mediaBlock("videos", [grid(tiles.slice(0, 4))]));
+          continue;
+        }
+        if (isMedia(section)) {
+          if (feedsFor(section).length) parts.push(mediaBlock(section));
+          // Without a photo source, the photos the page bundles stand in, the rest a press away in Photos.
+          else if (section === "photos" && library.photos?.length) {
+            const photos = element("section", "ag-el-section");
+            photos.dataset.section = "photos";
+            const row = element("div", "ag-el-grid");
+            row.append(...library.photos.slice(0, 4).map((photo) => {
+              const button = element("button", "ag-el");
+              button.type = "button";
+              button.setAttribute("aria-label", labels.addElement(photo.name));
+              const picture = element("img", "ag-el-picture");
+              picture.alt = "";
+              picture.loading = "lazy";
+              picture.src = photo.thumb;
+              const name = element("span", "ag-el-name");
+              name.textContent = photo.name;
+              button.append(picture, name);
+              button.addEventListener("click", () => void addStockPhoto(photo));
+              return button;
+            }));
+            photos.append(head(labels.sectionNames.photos, "photos-tab", library.photos.length > 4), row);
+            parts.push(photos);
+          }
+          continue;
+        }
         const tiles = section === "recent" ? recentTiles() : allTiles.filter((tile) => tile.section === section);
         const shown = ROW[section] ?? 4;
         const block = element("section", "ag-el-section");
         block.dataset.section = section;
-        block.append(head(labels.sectionNames[section], section, tiles.length > shown || section === "videos"), grid(tiles.slice(0, shown)));
+        block.append(head(labels.sectionNames[section], section, tiles.length > shown), grid(tiles.slice(0, shown)));
         parts.push(block);
-        // Photos sit after the frames they fill: a few free ones, the rest a press away in Photos.
-        if (section === "grids" && library.photos?.length) {
-          const photos = element("section", "ag-el-section");
-          photos.dataset.section = "photos";
-          const row = element("div", "ag-el-grid");
-          row.append(...library.photos.slice(0, 4).map((photo) => {
-            const button = element("button", "ag-el");
-            button.type = "button";
-            button.setAttribute("aria-label", labels.addElement(photo.name));
-            const picture = element("img", "ag-el-picture");
-            picture.alt = "";
-            picture.loading = "lazy";
-            picture.src = photo.thumb;
-            const name = element("span", "ag-el-name");
-            name.textContent = photo.name;
-            button.append(picture, name);
-            button.addEventListener("click", () => void addStockPhoto(photo));
-            return button;
-          }));
-          photos.append(head(labels.sectionNames.photos, "photos", library.photos.length > 4), row);
-          parts.push(photos);
-        }
       }
     }
     elementsBody.replaceChildren(...parts);
   }
+
+  /** The key under a section opened whole that shows another page of it. */
+  function moreKey() {
+    const more = keyButton("ag-el-more", labels.loadMore, ICONS.add);
+    more.addEventListener("click", () => {
+      openPages++;
+      renderElements();
+      elementsBody.querySelector<HTMLElement>(".ag-el-more")?.focus();
+    });
+    return more;
+  }
+
+  /** A grid of one source's results, filled in when they arrive; `paged` adds a key for the next page. */
+  function mediaGrid(feed: MediaFeed, query: string, pages: number, limit?: number, paged = false): HTMLElement {
+    const box = element("div", "ag-el-media");
+    const node = element("div", "ag-el-grid");
+    node.setAttribute("aria-busy", "true");
+    box.append(node);
+    void Promise.all(Array.from({ length: pages }, (_, index) => mediaPage(feed, query, index + 1)))
+      .then((all) => {
+        const items = all.flatMap((page) => page.items).slice(0, limit);
+        node.replaceChildren(...items.map((item) => mediaTile(item, feed)));
+        if (!items.length) box.append(Object.assign(element("p", "ag-help"), { textContent: labels.nothingFound }));
+        if (paged && all[all.length - 1]?.more) box.append(moreKey());
+      })
+      .catch(() => node.replaceChildren(Object.assign(element("p", "ag-help"), { textContent: labels.mediaUnavailable })))
+      .finally(() => node.removeAttribute("aria-busy"));
+    return box;
+  }
+
+  /** A stock result: its preview and name; pressing it brings the file in and puts it on the picture. */
+  function mediaTile(item: MediaItem, feed: MediaFeed) {
+    const button = element("button", "ag-el ag-el-stock");
+    button.type = "button";
+    button.dataset.kind = item.kind;
+    const by = item.credit?.name ? labels.mediaBy(item.credit.name, feed.name) : feed.name;
+    button.setAttribute("aria-label", `${labels.addElement(item.name)}. ${by}`);
+    button.title = `${item.name}\n${by}`;
+    const picture = element("img", "ag-el-picture");
+    picture.alt = "";
+    picture.loading = "lazy";
+    picture.decoding = "async";
+    picture.referrerPolicy = "no-referrer";
+    picture.src = item.thumb;
+    const name = element("span", "ag-el-name");
+    name.textContent = item.name;
+    button.append(picture, name);
+    button.addEventListener("click", () => void addMedia(item, button));
+    return button;
+  }
+
+  /** A brand's logo, drawn in its colour. */
+  function logoTile(logo: Logo) {
+    const button = element("button", "ag-el ag-el-logo");
+    button.type = "button";
+    button.setAttribute("aria-label", labels.addElement(logo.name));
+    button.title = logo.name;
+    const box = element("span", "ag-el-picture");
+    const picture = icon("");
+    picture.setAttribute("viewBox", "0 0 24 24");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", logo.path);
+    path.setAttribute("fill", logo.hex);
+    picture.append(path);
+    box.append(picture);
+    const name = element("span", "ag-el-name");
+    name.textContent = logo.name;
+    button.append(box, name);
+    button.addEventListener("click", () => addLogo(logo));
+    return button;
+  }
+
+  /** A logo on the picture, a sixth of the page across, in its brand's colour. */
+  function addLogo(logo: Logo) {
+    const { width, height } = SIZES[layout];
+    const side = 0.16 * Math.min(width, height);
+    addLayer({ id: layerId("graphic"), kind: "graphic", art: { w: 24, h: 24, paths: [{ d: logo.path, fill: "currentColor" }] }, color: logo.hex, x: 0.5 - side / width / 2, y: 0.5 - side / height / 2, w: side / width, h: side / height, rotation: 0, opacity: 1 });
+  }
+
+  /** A stock result brought in once and kept with the design, then put on the picture, or into the empty frame
+   *  that is picked. Sources ask that what is used is kept, not linked to. */
+  async function addMedia(item: MediaItem, button: HTMLElement) {
+    if (button.getAttribute("aria-busy") === "true") return;
+    button.setAttribute("aria-busy", "true");
+    const key = `stock-${item.id}`;
+    try {
+      if (!pictures.has(key)) {
+        const response = await fetch(item.file);
+        if (!response.ok) throw new Error(String(response.status));
+        const blob = await response.blob();
+        const video = VIDEO_TYPES.includes(blob.type);
+        if (!video && !PICTURE_TYPES.includes(blob.type)) throw new Error(blob.type);
+        if (blob.size > (video ? VIDEO_LIMIT : PICTURE_LIMIT)) throw new Error("size");
+        await keepPicture(blob, key, false);
+      }
+      addPicture(key);
+    } catch {
+      tell(labels.mediaFailed);
+    } finally {
+      button.removeAttribute("aria-busy");
+    }
+  }
+
   elementSearch.addEventListener("input", () => {
     openSection = null;
-    renderElements();
+    // A pause in typing before the sources are asked, so each letter doesn't send a search.
+    clearTimeout(searchTimer);
+    searchTimer = window.setTimeout(renderElements, 300);
   });
+  let searchTimer = 0;
   const recentTiles = () => recent.map((tileId) => allTiles.find((tile) => tile.id === tileId)).filter((tile): tile is ElementTile => Boolean(tile));
 
   /** Whether a colour has next to no hue, as the Paper theme's black accent has. */
@@ -2456,7 +2787,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       return;
     }
     const image = await loadImage(source);
-    pictures.set(key, { source, image, video: null, url: image.src.startsWith("blob:") ? image.src : null, listed });
+    const animation = typeof source === "string" ? null : await decodeAnimation(source);
+    pictures.set(key, { source, image, video: null, url: image.src.startsWith("blob:") ? image.src : null, listed, animation });
   }
 
   /** The videos on the page now, each once. */

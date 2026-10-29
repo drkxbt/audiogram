@@ -405,3 +405,17 @@ test("a layer being shown once moves while the rest of the picture stays still",
   assert.ok(alpha("Hi") < 0.9, `fading in: ${alpha("Hi")}`);
   assert.equal(alpha("There"), 1);
 });
+
+test("a moving picture shows the frame for the clip's time, counted from when its layer comes in, and loops", () => {
+  const frames = [{ width: 10, height: 10, name: "a" }, { width: 10, height: 10, name: "b" }, { width: 10, height: 10, name: "c" }];
+  const layer = { id: "s", kind: "image", image: "s", from: 1, x: 0, y: 0, w: 0.2, h: 0.2, rotation: 0, opacity: 1 };
+  const drawn = (time) => {
+    const log = canvasLog(1000, 1000);
+    new Painter(scene({ layers: [layer], images: new Map([["s", frames[0]]]), animations: new Map([["s", { frames, ends: [0.1, 0.2, 0.3] }]]) })).paint(log.ctx, time);
+    return log.calls.find((call) => call.op === "drawImage")?.image.name;
+  };
+  assert.equal(drawn(1.05), "a");
+  assert.equal(drawn(1.15), "b");
+  assert.equal(drawn(1.25), "c");
+  assert.equal(drawn(1.35), "a", "back to the start");
+});

@@ -6,7 +6,7 @@ export { clipTimeAt, joinParts, partsLength, readClip, readReel, recordingTimeAt
 export { OUTLINE_RATE, openSource, type AudioSource, type SourceOptions } from "./source.js";
 export { frameSpan, indexMp3, parseWav, wavHeader, type FrameSpan, type Mp3Index, type WavInfo } from "./mp3.js";
 export { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
-export { clock, FILTERS, fontOf, METALS, metalCss, paintOf, Painter, shownText, SIZES, textHeight, textWidth, THEMES, wrap, type Layout, type Overlay, type OverlayFrame, type Page, type Scene, type Theme, type Visual } from "./render.js";
+export { clock, FILTERS, fontOf, METALS, metalCss, paintOf, Painter, shownText, SIZES, textHeight, textWidth, THEMES, wrap, type Animation, type Layout, type Overlay, type OverlayFrame, type Page, type Scene, type Theme, type Visual } from "./render.js";
 export { alignToPage, backgroundOf, defaultLayers, DIRECTED, entranceLength, FRAME_SIZES, isBackgroundLayer, layerAt, motionAt, moveLayer, pageCovers, resizeLayer, resizeTurned, rotateLayer, showCaptions, snapMove, stacked, UNIT_WAYS, widthAnchored, type Adjust, type Ambient, type Art, type Box, type ChartKind, type ClipFrom, type Crop, type Datum, type Device, type Direction, type Entrance, type Guide, type Handle, type Layer, type LayerKind, type Loop, type Motion, type PageEdge, type Paint, type ShapeKind, type Solid, type TextEffect } from "./layers.js";
 export { colourPanel, COLOUR_LABELS, DEFAULT_COLOURS, DEFAULT_GRADIENTS, documentColours, hexToHsv, hsvToHex, markPicked, parseHex, type ColourChoice, type ColourLabels, type ColourPanelOptions } from "./colour.js";
 export { type PaintBox, type PaintEnv } from "./paint-env.js";
@@ -14,4 +14,4 @@ export { elementTiles, searchTiles, SECTIONS, type ElementTile, type SectionId }
 export { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
 export { createStage, type FontChoice, type Stage, type StageHost, type StageLabels } from "./stage.js";
 export { canExportMp4, exportClip, type ExportOptions, type ExportResult } from "./export.js";
-export { audiogram, type Editor, type EditorOptions, type Labels, type Library, type Settings, type StockPhoto, type Tab, type TemplateChoice } from "./editor.js";
+export { audiogram, type Editor, type EditorOptions, type Labels, type Library, type Logo, type MediaFeed, type MediaItem, type MediaKind, type MediaPage, type Settings, type StockPhoto, type Tab, type TemplateChoice } from "./editor.js";

@@ -35,6 +35,12 @@ export const THEMES: Theme[] = [
   { name: "Ember", background: "#2a0f0b", shade: "#4a1a12", text: "#fff1ea", muted: "#d19c8c", accent: "#ff6a4d", onAccent: "#2a0f0b" },
 ];
 
+/** A picture that moves: its frames, and the second each one ends; it loops from the start after the last. */
+export interface Animation {
+  frames: CanvasImageSource[];
+  ends: number[];
+}
+
 /** The page behind every layer: one colour, or a gradient from it to `to` at `angle` degrees (180 runs top to bottom). */
 export interface Page {
   color: string;
@@ -74,6 +80,9 @@ export interface Scene {
   layers?: Layer[];
   /** The pictures and videos image and video layers show, by key. */
   images?: Map<string, CanvasImageSource>;
+  /** Pictures that move, such as stickers, by the same keys: drawn a frame at a time from the clip's time, so the
+   *  preview and the export show the same frame at the same moment. */
+  animations?: Map<string, Animation>;
   /** The page's own colour; the theme's gradient when left out. */
   page?: Page | null;
 }
@@ -750,7 +759,7 @@ export class Painter {
     else if (layer.kind === "visual") this.paintVisual(ctx, box, time, fillOf(ctx, layer.color, theme, "accent", box), unit, layer.visual ?? this.scene.visual, this.meterFor(layer.id));
     else if (layer.kind === "captions") this.paintCaptions(ctx, box, time, layer, font, unit);
     else if (layer.kind === "image" || layer.kind === "video") {
-      const image = this.scene.images?.get(layer.image ?? "");
+      const image = this.picture(layer, time);
       // The picture stays inside its box: a cover or a crop draws past it. A frame cuts it to its shape, and rounded
       // corners to theirs.
       ctx.save();
@@ -773,11 +782,11 @@ export class Painter {
         ctx.setLineDash([]);
       }
     } else if (layer.kind === "graphic") this.paintGraphic(ctx, layer, box);
-    else if (layer.kind === "chart") paintChart(ctx, layer, box, this.envFor(ctx, time, font, unit, motion));
-    else if (layer.kind === "table") paintTable(ctx, layer, box, this.envFor(ctx, time, font, unit, motion));
-    else if (layer.kind === "solid") paintSolid(ctx, layer, box, this.envFor(ctx, time, font, unit, motion));
-    else if (layer.kind === "ambient") paintAmbient(ctx, layer, box, this.envFor(ctx, time, font, unit, motion));
-    else if (layer.kind === "mockup") paintMockup(ctx, layer, box, this.envFor(ctx, time, font, unit, motion));
+    else if (layer.kind === "chart") paintChart(ctx, layer, box, this.envFor(ctx, time, font, unit, motion, layer));
+    else if (layer.kind === "table") paintTable(ctx, layer, box, this.envFor(ctx, time, font, unit, motion, layer));
+    else if (layer.kind === "solid") paintSolid(ctx, layer, box, this.envFor(ctx, time, font, unit, motion, layer));
+    else if (layer.kind === "ambient") paintAmbient(ctx, layer, box, this.envFor(ctx, time, font, unit, motion, layer));
+    else if (layer.kind === "mockup") paintMockup(ctx, layer, box, this.envFor(ctx, time, font, unit, motion, layer));
     else if (layer.kind === "shape" && layer.shape === "line") this.paintLine(ctx, layer, box, unit);
     else if (layer.kind === "shape") {
       ctx.fillStyle = fillOf(ctx, layer.fill, theme, "accent", box);
@@ -804,8 +813,20 @@ export class Painter {
   }
 
   /** An empty frame, while the picture is edited: a soft tint with a small picture sign, to show where a photo goes. */
+  /** A layer's picture at a time: a moving one's frame then, counted from when the layer comes in, or a still one. */
+  private picture(layer: Layer, time: number, key = layer.image): CanvasImageSource | null {
+    const moving = this.scene.animations?.get(key ?? "");
+    if (moving?.frames.length) {
+      const length = moving.ends[moving.ends.length - 1] || 1;
+      const at = (((time - (layer.from ?? 0)) % length) + length) % length;
+      const index = moving.ends.findIndex((end) => at < end);
+      return moving.frames[index < 0 ? moving.frames.length - 1 : index];
+    }
+    return this.scene.images?.get(key ?? "") ?? null;
+  }
+
   /** What the drawing of a chart, a table, a mockup, a solid or a moving background is handed for one frame. */
-  private envFor(ctx: CanvasRenderingContext2D, time: number, font: string, unit: number, motion: Motion): PaintEnv {
+  private envFor(ctx: CanvasRenderingContext2D, time: number, font: string, unit: number, motion: Motion, layer: Layer): PaintEnv {
     const { theme } = this.scene;
     return {
       theme,
@@ -816,7 +837,7 @@ export class Painter {
       growth: motion.growth,
       fill: (paint, fallback, box) => fillOf(ctx, paint, theme, fallback, box),
       flat: (paint, fallback) => paintOf(paint, theme, fallback),
-      image: (key) => this.scene.images?.get(key ?? "") ?? null,
+      image: (key) => this.picture(layer, time, key),
       placeholders: this.placeholders,
       placeholderText: this.placeholderText,
       level: (at) => this.level(at),
