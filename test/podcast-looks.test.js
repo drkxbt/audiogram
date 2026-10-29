@@ -329,3 +329,11 @@ test("painters handed one store of scratch canvases reuse them, so a redraw for 
   assert.ok(made.length > before, "a painter with a store of its own makes its canvases");
   assert.ok(before <= 3, `three painters sharing a store made only the first one's canvases: ${before}`);
 });
+
+test("the preview is painted as sharp as the screen shows it: from half the frame up to the whole frame", async () => {
+  const { previewPixels } = await import("../dist/elements.js");
+  assert.deepEqual(previewPixels({ width: 1080, height: 1080 }, 374, 1.25), { width: 540, height: 540 }, "shown small: half the frame is plenty");
+  assert.deepEqual(previewPixels({ width: 1080, height: 1080 }, 507, 1.5), { width: 761, height: 761 }, "a laptop screen at 1.5x");
+  assert.deepEqual(previewPixels({ width: 1080, height: 1920 }, 900, 2), { width: 1080, height: 1920 }, "never more than the frame itself");
+  assert.deepEqual(previewPixels({ width: 1920, height: 1080 }, 0, 2), { width: 960, height: 540 }, "not laid out yet: half");
+});

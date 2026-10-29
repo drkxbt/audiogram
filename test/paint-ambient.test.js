@@ -123,3 +123,31 @@ test("lights add up on a dark ground and are laid over a light one", () => {
 test("a new background covers the whole page", () => {
   assert.deepEqual(ambientLayer("grid", "g"), { id: "g", kind: "ambient", ambient: "grid", x: 0, y: 0, w: 1, h: 1, rotation: 0, opacity: 1, fill: "background" });
 });
+
+test("an effect laid over the design paints only its lights, cut to its box: no ground, no gradient across it, no darkened corners", () => {
+  for (const style of STYLES) {
+    const { ctx, calls } = canvasLog();
+    paintAmbient(ctx, ambientLayer(style, "fx", true), page, environment(3));
+    const covers = (call) => call.op === "fillRect" && call.args[0] <= page.x && call.args[1] <= page.y && call.args[2] >= page.width && call.args[3] >= page.height;
+    const opaque = calls.filter((call) => covers(call) && typeof call.fillStyle === "string");
+    assert.equal(opaque.length, 0, `${style}: nothing solid across the whole box`);
+    assert.ok(!calls.some((call) => call.op === "createRadialGradient" && call.args[2] > 0 && Math.abs(call.args[0] - (page.x + page.width / 2)) < 1e-6 && call.args[5] > Math.hypot(page.width, page.height) / 2), `${style}: no vignette`);
+    assert.ok(calls.some((call) => call.op === "clip"), `${style}: kept to its box`);
+  }
+  assert.equal(ambientLayer("aurora", "fx", true).fill, "none");
+  assert.equal(ambientLayer("aurora", "bg").fill, "background");
+});
+
+test("the Videos tiles add a moving effect over the design, not a background under it", async () => {
+  const { elementTiles } = await import("../dist/elements.js");
+  const parts = Object.fromEntries(["captions", "bars", "wave", "pulse", "ring", "time", "avatar", "name", "handle", "title", "links"].map((key) => [key, key]));
+  const videos = elementTiles(parts).filter((tile) => tile.id.startsWith("video:"));
+  assert.equal(videos.length, STYLES.length);
+  for (const tile of videos) {
+    assert.ok(!tile.under, `${tile.id} goes on top`);
+    const [layer] = tile.make("square", (kind) => `${kind}-1`);
+    assert.equal(layer.kind, "ambient");
+    assert.equal(layer.fill, "none", `${tile.id} has no ground of its own`);
+    assert.ok(!layer.backdrop);
+  }
+});

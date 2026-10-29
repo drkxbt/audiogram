@@ -2,18 +2,17 @@
    tables, mockups, 3D shapes and moving backgrounds. Each entry knows its name, the words it is found by, and the
    layers it adds, laid out for the frame it goes on. The drawings a host's sets bring are searched and placed here
    too. Free of the DOM, so it can be tested on its own. */
-import { defaultLayers, FRAME_SIZES, type Ambient, type ChartKind, type Device, type Layer, type ShapeKind, type Solid } from "./layers.js";
+import { defaultLayers, FRAME_SIZES, type Ambient, type Device, type Layer, type ShapeKind, type Solid } from "./layers.js";
 import type { Layout, Visual } from "./render.js";
 import type { Drawing } from "./editor.js";
 import { ambientLayer } from "./paint-ambient.js";
-import { chartLayer } from "./paint-chart.js";
 import { mockupLayer } from "./paint-mockup.js";
 import { solidLayer } from "./paint-solid.js";
-import { tableLayer, type TableStyle } from "./paint-table.js";
 
-export type SectionId = "audio" | "shapes" | "lines" | "frames" | "grids" | "videos" | "charts" | "tables" | "mockups" | "solids";
+export type SectionId = "audio" | "shapes" | "lines" | "frames" | "grids" | "videos" | "mockups" | "solids";
 
-export const SECTIONS: SectionId[] = ["audio", "shapes", "lines", "frames", "grids", "videos", "charts", "tables", "mockups", "solids"];
+// Charts and tables are no longer offered in Elements (the owner took them out); layers of those kinds still draw.
+export const SECTIONS: SectionId[] = ["audio", "shapes", "lines", "frames", "grids", "videos", "mockups", "solids"];
 
 export interface ElementTile {
   /** Stable across visits, so Recently used can keep it: the section and the entry, as "shape:star". */
@@ -111,27 +110,6 @@ const GRIDS: Array<[string, string, Array<[number, number, number, number]>]> = 
   ["big-top", "One big over two", [[0, 0, 1, 0.6], [0, 0.6, 0.5, 0.4], [0.5, 0.6, 0.5, 0.4]]],
   ["six", "Six", [[0, 0, 1 / 3, 0.5], [1 / 3, 0, 1 / 3, 0.5], [2 / 3, 0, 1 / 3, 0.5], [0, 0.5, 1 / 3, 0.5], [1 / 3, 0.5, 1 / 3, 0.5], [2 / 3, 0.5, 1 / 3, 0.5]]],
   ["nine", "Nine", Array.from({ length: 9 }, (_, i) => [(i % 3) / 3, Math.floor(i / 3) / 3, 1 / 3, 1 / 3] as [number, number, number, number])],
-];
-
-const CHARTS: Array<[ChartKind, string, string]> = [
-  ["column", "Columns", "bar graph stats"],
-  ["bar", "Bars", "graph ranking"],
-  ["line", "Line", "graph trend growth"],
-  ["area", "Area", "graph trend"],
-  ["pie", "Pie", "share split"],
-  ["donut", "Donut", "share split"],
-  ["ring", "Progress ring", "percent goal"],
-  ["progress", "Progress bar", "percent goal"],
-  ["number", "Big number", "stat figure count"],
-  ["poll", "Poll", "vote question answers"],
-];
-
-const TABLES: Array<[TableStyle, string, string]> = [
-  ["simple", "Simple", "grid"],
-  ["header", "With a header", "grid"],
-  ["striped", "Striped", "grid rows"],
-  ["schedule", "Schedule", "agenda running order time"],
-  ["scoreboard", "Scoreboard", "scores results compare"],
 ];
 
 const DEVICES: Array<[Device, string, string]> = [
@@ -251,13 +229,8 @@ export function elementTiles(parts: Record<"captions" | "bars" | "wave" | "pulse
     });
   }
   for (const [style, name, tags] of AMBIENTS) {
-    tiles.push({ id: `video:${style}`, section: "videos", name, tags: `moving background motion ${tags}`, under: true, make: (_, newId) => [{ ...ambientLayer(style, newId("ambient")) }] });
-  }
-  for (const [kind, name, tags] of CHARTS) {
-    tiles.push({ id: `chart:${kind}`, section: "charts", name, tags: `chart data ${tags}`, make: (_, newId) => [chartLayer(kind, newId("chart"))] });
-  }
-  for (const [style, name, tags] of TABLES) {
-    tiles.push({ id: `table:${style}`, section: "tables", name, tags: `table sheet cells ${tags}`, make: (_, newId) => [tableLayer(style, newId("table"))] });
+    // A moving effect over the whole design, lights only, which can be moved and sized like any part.
+    tiles.push({ id: `video:${style}`, section: "videos", name, tags: `moving effect overlay motion animated ${tags}`, make: (_, newId) => [{ ...ambientLayer(style, newId("ambient"), true) }] });
   }
   for (const [device, name, tags] of DEVICES) {
     tiles.push({
@@ -312,4 +285,14 @@ export function matchDrawings(drawings: Drawing[], query: string): Drawing[] {
 export function drawingLayer(drawing: Drawing, layout: Layout, id: string): Layer {
   const { w, h } = drawing.art;
   return base(id, "graphic", 0, 0, 0, 0, { ...centred(layout, 0.16, w > 0 && h > 0 ? w / h : 1), art: drawing.art, color: drawing.color ?? "accent" });
+}
+
+/**
+ * How many pixels the preview of a `frame` is painted with, when it is shown `shownWidth` CSS pixels wide on a screen
+ * of `ratio` device pixels to one: as many as the screen shows, so a photo is never stretched soft, from half the frame
+ * (plenty for a small preview, and a quarter of the pixels to paint) up to the frame itself.
+ */
+export function previewPixels(frame: { width: number; height: number }, shownWidth: number, ratio: number): { width: number; height: number } {
+  const scale = Math.min(1, Math.max(0.5, (shownWidth * ratio) / frame.width || 0));
+  return { width: Math.round(frame.width * scale), height: Math.round(frame.height * scale) };
 }

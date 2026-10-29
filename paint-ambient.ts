@@ -22,6 +22,8 @@ interface Frame {
   glow: string;
   /** Whether the ground is dark, when lights add up; on a light ground they are laid over it instead. */
   dark: boolean;
+  /** Laid over the design as an effect: only the lights are drawn, with no ground and no shading across the box. */
+  overlay: boolean;
   seed: number;
   unit: number;
   /** The layer's fade as the painter set it, which every alpha here is a share of. */
@@ -98,6 +100,8 @@ function lights(frame: Frame) {
 
 /** Darker toward the corners, which gives a flat ground some depth. */
 function vignette(frame: Frame, strength: number) {
+  // Over a design, darkened corners would shade the words and pictures under the effect.
+  if (frame.overlay) return;
   const { ctx, box } = frame;
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
@@ -173,9 +177,12 @@ function flow(frame: Frame) {
   sweep.addColorStop(0, mix(frame.ground, frame.light, 0.42));
   sweep.addColorStop(middle, frame.ground);
   sweep.addColorStop(1, mix(frame.ground, frame.glow, 0.16));
-  ctx.globalCompositeOperation = "source-over";
-  ctx.fillStyle = sweep;
-  ctx.fillRect(box.x, box.y, box.width, box.height);
+  // The sweep is a ground of its own; over a design only the wandering light is drawn.
+  if (!frame.overlay) {
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = sweep;
+    ctx.fillRect(box.x, box.y, box.width, box.height);
+  }
   lights(frame);
   const x = box.x + box.width * (0.5 + 0.3 * Math.sin(TAU * rateX * t + phase));
   const y = box.y + box.height * (0.5 + 0.28 * Math.sin(TAU * rateY * t));
@@ -489,7 +496,9 @@ const STYLES: Record<Ambient, (frame: Frame) => void> = { aurora, flow, bokeh, p
 /** Draws a moving background over its box for the clip's time. */
 export function paintAmbient(ctx: Ctx, layer: Layer, box: PaintBox, env: PaintEnv): void {
   if (!(box.width > 0 && box.height > 0)) return;
-  const groundPaint = layer.fill ?? "background";
+  // A fill of "none" lays the effect over the design: its lights alone, judged against the page's own colour.
+  const overlay = layer.fill === "none";
+  const groundPaint = overlay ? "background" : layer.fill ?? "background";
   const ground = env.flat(groundPaint, "accent");
   const level = layer.react ? Math.min(1, Math.max(0, env.level(env.time) || 0)) : 0;
   const frame: Frame = {
@@ -504,16 +513,24 @@ export function paintAmbient(ctx: Ctx, layer: Layer, box: PaintBox, env: PaintEn
     seed: seedOf(layer.id),
     unit: env.unit,
     alpha: ctx.globalAlpha,
+    overlay,
   };
   ctx.save();
-  ctx.fillStyle = env.fill(groundPaint, "accent", box);
-  ctx.fillRect(box.x, box.y, box.width, box.height);
+  if (overlay) {
+    ctx.beginPath();
+    ctx.rect(box.x, box.y, box.width, box.height);
+    ctx.clip();
+  } else {
+    ctx.fillStyle = env.fill(groundPaint, "accent", box);
+    ctx.fillRect(box.x, box.y, box.width, box.height);
+  }
   (STYLES[layer.ambient ?? "aurora"] ?? aurora)(frame);
   ctx.restore();
 }
 
-/** A new moving background covering the whole page. */
-export function ambientLayer(style: Ambient, id: string): Layer {
-  // Its ground named outright, so the toolbar's swatch shows the colour it is painted on.
-  return { id, kind: "ambient", ambient: style, x: 0, y: 0, w: 1, h: 1, rotation: 0, opacity: 1, fill: "background" };
+/** A new moving background covering the whole page, or with `over`, the same movement as an effect laid over the
+ *  design: lights only, on no ground of its own. */
+export function ambientLayer(style: Ambient, id: string, over = false): Layer {
+  // A background's ground is named outright, so the toolbar's swatch shows the colour it is painted on.
+  return { id, kind: "ambient", ambient: style, x: 0, y: 0, w: 1, h: 1, rotation: 0, opacity: 1, fill: over ? "none" : "background" };
 }

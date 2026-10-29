@@ -10,7 +10,7 @@ import { initialView, outlineBars, panView, showSpan, zoomView, type View } from
 import { backgroundOf, defaultLayers, entranceLength, isBackgroundLayer, libraryPhotos, moveLayer, PHOTO_KEY, showCaptions, stacked, widthAnchored, type Art, type Layer, type LayerKind } from "./layers.js";
 import { createStage, type FontChoice, type StageLabels } from "./stage.js";
 import { textHeight, textWidth } from "./render.js";
-import { drawingLayer, elementTiles, matchDrawings, restyleSound, searchTiles, soundPart, type ElementTile, type SectionId } from "./elements.js";
+import { drawingLayer, elementTiles, matchDrawings, previewPixels, restyleSound, searchTiles, soundPart, type ElementTile, type SectionId } from "./elements.js";
 import { DEVICES } from "./paint-mockup.js";
 
 export type Tab = "design" | "elements" | "text" | "photos" | "music" | "captions" | "layers";
@@ -665,7 +665,7 @@ const DEFAULT_LABELS: Labels = {
   grids: "Photo grids",
   gridNames: { across: "Two across", down: "Two down", three: "Three across", four: "Four" },
   nothingFound: "Nothing matches that. Try a shorter word.",
-  sectionNames: { recent: "Recently used", audio: "Sound and captions", shapes: "Shapes", graphics: "Graphics", lines: "Lines", frames: "Photo frames", grids: "Photo grids", photos: "Photos", illustrations: "Illustrations", videos: "Videos", stickers: "Stickers", gifs: "GIFs", charts: "Charts", tables: "Tables", mockups: "Mockups", solids: "3D shapes" },
+  sectionNames: { recent: "Recently used", audio: "Sound and captions", shapes: "Shapes", graphics: "Graphics", lines: "Lines", frames: "Photo frames", grids: "Photo grids", photos: "Photos", illustrations: "Illustrations", videos: "Videos", stickers: "Stickers", gifs: "GIFs", mockups: "Mockups", solids: "3D shapes" },
   mediaSource: "Source",
   loadMore: "Load more",
   loadingLibrary: "Loading…",
@@ -1247,8 +1247,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     input.placeholder = labels.linkHints[index] ?? "";
     input.setAttribute("aria-label", labels.link(index + 1));
     input.addEventListener("input", () => {
+      const had = links.some((link) => link.trim());
       links[index] = input.value;
-      rebuild();
+      // The first link typed into a design with no place for links gets one, at the foot, so it shows; moved or
+      // taken off after that, where it goes is the user's call.
+      if (!had && input.value.trim() && !layersFor(layout).some((layer) => layer.kind === "links" && !layer.hidden)) addElement("links");
+      else rebuild();
       changed();
     });
     input.addEventListener("change", () => record());
@@ -1752,15 +1756,20 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   });
   zoomWatch.observe(scroller);
 
-  function sizePreview() {
-    // Half size: plenty for a preview, and a quarter of the pixels to paint every frame.
-    const { width, height } = SIZES[layout];
-    if (preview.width !== width / 2 || preview.height !== height / 2) {
-      preview.width = width / 2;
-      preview.height = height / 2;
-    }
+  /** Sizes the preview's pixels to what the screen shows of it; true when they changed, and so were cleared. */
+  function sizePreview(): boolean {
+    const { width, height } = previewPixels(SIZES[layout], preview.getBoundingClientRect().width, devicePixelRatio || 1);
     stageArea.dataset.layout = layout;
+    if (preview.width === width && preview.height === height) return false;
+    preview.width = width;
+    preview.height = height;
+    return true;
   }
+  // Zooming, a narrower window or a page dragged to another screen changes what the preview needs.
+  const previewWatch = new ResizeObserver(() => {
+    if (sizePreview()) paint();
+  });
+  previewWatch.observe(preview);
 
   function paint() {
     const time = clipTime();
@@ -2395,7 +2404,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         }
       }
     } else {
-      const order: Array<Exclude<PanelView, SetView> | DrawingSet> = [...(recent.length ? ["recent" as const] : []), "audio", "shapes", "graphics", "lines", "frames", "grids", "photos", "illustrations", "videos", "stickers", "gifs", ...(library.drawings ?? []), "charts", "tables", "mockups", "solids"];
+      const order: Array<Exclude<PanelView, SetView> | DrawingSet> = [...(recent.length ? ["recent" as const] : []), "audio", "shapes", "graphics", "lines", "frames", "grids", "photos", "illustrations", "videos", "stickers", "gifs", ...(library.drawings ?? []), "mockups", "solids"];
       for (const section of order) {
         if (typeof section !== "string") {
           const all = drawingsIn(section, "all");
@@ -2627,7 +2636,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const top = Math.min(...made.map((layer) => layer.y));
     const right = Math.max(...made.map((layer) => layer.x + layer.w));
     const bottom = Math.max(...made.map((layer) => layer.y + layer.h));
-    const fill = tile.under ? 1 : 0.76 / Math.max(right - left, bottom - top);
+    // A full-page part (a background, or an effect laid over the design) fills the tile as it fills the page.
+    const fill = tile.under || made.some((layer) => layer.kind === "ambient") ? 1 : 0.76 / Math.max(right - left, bottom - top);
     // Words, tables and lines true to scale would be a pixel or two at this size, so a tile draws them bolder.
     const line = (layer: Layer) => layer.kind === "shape" && layer.shape === "line";
     const worded = (layer: Layer) => layer.kind === "table" || layer.kind === "captions" || layer.kind === "text" || layer.kind === "title" || layer.kind === "name" || layer.kind === "handle" || layer.kind === "links" || layer.kind === "time";
@@ -4388,6 +4398,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       stop();
       observer.disconnect();
       zoomWatch.disconnect();
+      previewWatch.disconnect();
       templateWatch?.disconnect();
       tileWatch?.disconnect();
       stopRehearsal();
