@@ -196,8 +196,8 @@
 .ag-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 .ag-tools .ag-key { justify-content: flex-start; height: 32px; padding: 0 8px; font-size: 12.5px; }
 .ag-tools .ag-key svg { width: 16px; height: 16px; }
-.ag-cues { flex: 1 1 0; display: grid; align-content: start; gap: 4px; min-height: 0; margin: 0; padding: 0; overflow: hidden; list-style: none; }
-.ag-cue { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px; }
+.ag-cues { flex: 1 1 0; display: grid; align-content: start; gap: 4px; min-height: 0; margin: 0; padding: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; list-style: none; }
+.ag-cue { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: 4px; }
 .ag-cue[data-active] .ag-time { background: var(--ag-accent); color: var(--ag-accent-ink); }
 .ag-cues-empty { padding: 6px 0; color: var(--ag-muted); font-size: 12.5px; }
 .ag-time {
@@ -213,7 +213,7 @@
   cursor: pointer;
 }
 .ag-time:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
-.ag-cue-text { height: 32px; }
+.ag-cue-text { field-sizing: content; height: auto; min-height: 32px; max-height: 120px; padding-top: 7px; padding-bottom: 7px; line-height: 18px; resize: none; overflow-y: auto; }
 .ag-remove { width: 30px; height: 30px; }
 .ag-remove svg { width: 15px; height: 15px; }
 .ag-pager { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: -4px; }
@@ -1111,7 +1111,8 @@
 @media (pointer: coarse) {
   .ag-btn { width: 40px; height: 40px; }
   .ag-key { height: 40px; }
-  .ag-tools .ag-key, .ag-file .ag-key, .ag-more .ag-key, .ag-time, .ag-cue-text, .ag-add-recording, .ag-split, .ag-fit { height: 40px; }
+  .ag-tools .ag-key, .ag-file .ag-key, .ag-more .ag-key, .ag-time, .ag-add-recording, .ag-split, .ag-fit { height: 40px; }
+  .ag-cue-text { min-height: 40px; padding-top: 11px; padding-bottom: 11px; }
   .ag-pager .ag-btn, .ag-part .ag-part-remove, .ag-cue .ag-remove { width: 40px; height: 40px; }
   .ag-more summary { padding: 10px 0; }
   .ag-map { height: 28px; }

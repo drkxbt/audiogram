@@ -1,4 +1,4 @@
-import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, spread, toSRT, type Cue } from "./captions.js";
+import { clip, cueAt, editCue, formatTime, markStart, paginate, parseSubtitles, spread, toSRT, type Cue } from "./captions.js";
 import { exportClip, type ExportResult } from "./export.js";
 import { clipTimeAt, partsLength, readClip, readReel, stitchCues, type Reel } from "./parts.js";
 import { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
@@ -759,6 +759,7 @@ const MUSIC_LENGTH = 180;
 let instances = 0;
 
 /** Captions on screen break into pages short enough for the shape of the video. */
+const FIELD_SIZING = typeof CSS !== "undefined" && CSS.supports("field-sizing", "content");
 const pageLength = (layout: Layout) => (layout === "landscape" ? 46 : layout === "portrait" ? 34 : 32);
 
 /** A time as m:ss, or h:mm:ss from an hour. */
@@ -3469,15 +3470,31 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       time.textContent = formatTime(cue.start);
       time.setAttribute("aria-label", labels.seek(formatTime(cue.start)));
       time.addEventListener("click", () => seek(cue.start));
-      const text = element("input", "ag-input ag-cue-text");
-      text.type = "text";
+      // A long caption wraps onto more lines, so all of it can be read and corrected; it is still one caption, so Enter
+      // puts the change in rather than starting a line.
+      const text = element("textarea", "ag-input ag-cue-text");
+      text.rows = 1;
       text.value = cue.text;
       text.autocomplete = "off";
+      text.spellcheck = true;
       text.setAttribute("aria-label", `${labels.captionText} ${formatTime(cue.start)}`);
+      // Where the browser can't size a text box to its words, it is sized as they change.
+      if (!FIELD_SIZING) {
+        const fit = () => {
+          text.style.height = "auto";
+          text.style.height = `${text.scrollHeight}px`;
+        };
+        text.addEventListener("input", fit);
+        requestAnimationFrame(fit);
+      }
+      text.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" || event.isComposing) return;
+        event.preventDefault();
+        text.blur();
+      });
       text.addEventListener("change", () => {
         const at = findCue(cue);
-        // New words lose the old ones' timings and share the caption's time again.
-        if (at >= 0) cues[at] = { start: cue.start, end: cue.end, text: text.value.trim(), ...(cue.speaker ? { speaker: cue.speaker } : {}) };
+        if (at >= 0) cues[at] = editCue(cue, text.value);
         cues = cues.filter((item) => item.text);
         rebuild();
       });
@@ -3495,7 +3512,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     earlierButton.disabled = cuePage === 0;
     laterButton.disabled = cuePage >= pages - 1;
     // Rebuilding the list would drop the focus of someone typing, so it is left alone while they are.
-    if (cueList.contains(document.activeElement) && document.activeElement instanceof HTMLInputElement) return;
+    if (cueList.contains(document.activeElement) && document.activeElement instanceof HTMLTextAreaElement) return;
     if (!rows.length) {
       const empty = element("li", "ag-cues-empty");
       empty.textContent = labels.noCaptions;
@@ -4154,7 +4171,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const at = shown.findIndex((cue) => cue.start === start && cue.text === labels.captionText);
     if (perPage && at >= 0) cuePage = Math.floor(at / perPage);
     rebuild();
-    const input = [...cueList.querySelectorAll<HTMLInputElement>(".ag-cue-text")].find((item) => item.value === labels.captionText);
+    const input = [...cueList.querySelectorAll<HTMLTextAreaElement>(".ag-cue-text")].find((item) => item.value === labels.captionText);
     input?.focus();
     input?.select();
   });

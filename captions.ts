@@ -122,6 +122,16 @@ export function timeWords(cue: Cue): Word[] {
   });
 }
 
+/** A cue with its words typed again. A correction word for word keeps each word's time; words added or taken out
+ *  share the cue's time again, since there is no telling which time belongs to which. */
+export function editCue(cue: Cue, typed: string): Cue {
+  const text = typed.replace(/\s+/g, " ").trim();
+  const said = text.split(" ");
+  const { words, ...rest } = cue;
+  if (words?.length === said.length) return { ...rest, text, words: words.map((word, index) => (word.text === said[index] ? word : { ...word, text: said[index] })) };
+  return { ...rest, text };
+}
+
 /** Breaks cues longer than `maxChars` into pages that fit on screen, each page keeping its words' times. */
 export function paginate(cues: readonly Cue[], maxChars = 42): Cue[] {
   const out: Cue[] = [];

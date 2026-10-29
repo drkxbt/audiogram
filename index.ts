@@ -1,5 +1,5 @@
 export { fft, peaks, rms, spectrum, Smoother, type SpectrumOptions } from "./wave.js";
-export { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, parseTime, spread, timeWords, toSRT, toVTT, type Cue, type Word } from "./captions.js";
+export { clip, cueAt, editCue, formatTime, markStart, paginate, parseSubtitles, parseTime, spread, timeWords, toSRT, toVTT, type Cue, type Word } from "./captions.js";
 export { Mp4Builder, mux, type AudioTrack, type Sample, type Track, type TrackHead, type VideoTrack } from "./mp4.js";
 export { mixMusic, type MusicOptions } from "./mix.js";
 export { clipTimeAt, joinParts, partsLength, readClip, readReel, recordingTimeAt, stitch, stitchCues, type Parts, type Reader, type Reel } from "./parts.js";

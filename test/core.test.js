@@ -345,3 +345,12 @@ test("the clip's clock counts minutes, then hours once there are sixty of them",
   assert.equal(clock(3602.4), "1:00:02");
   assert.equal(clock(5 * 3600 + 61), "5:01:01");
 });
+
+test("a caption corrected word for word keeps each word's time; one with words added or taken out shares its time again", async () => {
+  const { editCue } = await import("../dist/captions.js");
+  const words = [{ text: "ask", start: 8.6, end: 8.98 }, { text: "wot", start: 8.98, end: 9.22 }, { text: "you", start: 9.22, end: 9.44 }];
+  const cue = { start: 8.6, end: 9.44, text: "ask wot you", speaker: "Host", words };
+  assert.deepEqual(editCue(cue, "  ask \n what   you "), { start: 8.6, end: 9.44, text: "ask what you", speaker: "Host", words: [words[0], { ...words[1], text: "what" }, words[2]] });
+  assert.deepEqual(editCue(cue, "ask what you can"), { start: 8.6, end: 9.44, text: "ask what you can", speaker: "Host" });
+  assert.deepEqual(editCue({ start: 0, end: 1, text: "hi" }, "hello"), { start: 0, end: 1, text: "hello" });
+});
