@@ -236,6 +236,8 @@ export interface StageHost {
   loadFont(family: string, sample?: string): Promise<void>;
   /** The words a text layer shows, and a way to change them as they are typed. */
   textOf(layer: Layer): string;
+  /** Where a label's words run across its box, in frame fractions, so its outline hugs them; null to outline the box. */
+  wordsSpan?(layer: Layer): { x: number; w: number } | null;
   setText(layer: Layer, text: string): void;
   /** The layer being typed into, which the picture leaves out while the box over it shows the words. */
   setEditing(id: string | null): void;
@@ -424,7 +426,10 @@ export function createStage(host: StageHost): Stage {
     box.toggleAttribute("data-multi", group.length > 1);
     if (layer && !box.hidden && group.length > 1) frameOf(box, { ...layer, ...bounds(group), rotation: 0 });
     else if (layer && !box.hidden) {
-      frameOf(box, layer);
+      // Words are outlined where they run, not across the whole room the design gives them; captions keep their box,
+      // since their words change as the clip plays.
+      const span = !layer.rotation && TEXT_KINDS.has(layer.kind) && layer.kind !== "captions" ? host.wordsSpan?.(layer) : null;
+      frameOf(box, span ? { ...layer, ...span } : layer);
       const { width, height } = size();
       box.toggleAttribute("data-words", TEXT_KINDS.has(layer.kind));
       // Pictures keep their shape, so only their corners pull.
@@ -2298,9 +2303,10 @@ export function createStage(host: StageHost): Stage {
       sizeGroup.append(sizeName, smaller, sizeInput, larger);
       const weight = layer.weight ?? (layer.kind === "title" ? 700 : layer.kind === "captions" ? 650 : 400);
       const strong = weight >= 600;
-      // A font with no heavier or slanted files would be faked by each browser its own way, so those keys rest.
+      // A font with no heavier files would be faked by each browser its own way, so Bold rests. Italic always works: a
+      // font with no slanted files is slanted by the browser, the same in the preview and the export.
       const canBold = !font || heaviest(font) >= 600;
-      const canItalic = !font || font.files.some((file) => file.style === "italic");
+      const canItalic = true;
       const glyph = (key: string, text: string, label: string, pressed: boolean, allowed: boolean, missing: string, run: () => void) => {
         const button = keyed(element("button", `ag-btn ag-glyph${key === "italic" ? " ag-italic" : ""}`), key);
         button.type = "button";

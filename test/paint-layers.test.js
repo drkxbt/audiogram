@@ -464,3 +464,21 @@ test("at the sample point (a template's picture, or no clip yet) the sample is p
   assert.ok(words.slice(marked + 1).every((call) => call.globalAlpha === 0.5), "the words after it are still to come");
   assert.ok(log.calls.some((call) => call.op === "fill" && call.fillStyle === "#ffcc00"), "the mark is drawn in the highlight");
 });
+
+test("the words of a label take up only part of its box, across from where they are aligned", async () => {
+  const { wordsSpan } = await import("../dist/render.js");
+  // The test context measures 20 px a letter for 40 px words, so "drk" is 60 px of a 1080 frame.
+  const ctx = canvasLog(1080, 1080).ctx;
+  const name = { id: "n", kind: "name", x: 0.1, y: 0.5, w: 0.5, h: 0.05, rotation: 0, opacity: 1, size: 40, align: "left" };
+  const left = wordsSpan(ctx, name, "drk", "Geist", 1080, 1080);
+  assert.ok(Math.abs(left.x - 0.1) < 1e-9 && Math.abs(left.w * 1080 - 60) < 1, JSON.stringify(left));
+  const centred = wordsSpan(ctx, { ...name, align: "center" }, "drk", "Geist", 1080, 1080);
+  assert.ok(Math.abs(centred.x + centred.w / 2 - 0.35) < 1e-9, "centred on the box's middle");
+  const right = wordsSpan(ctx, { ...name, align: "right" }, "drk", "Geist", 1080, 1080);
+  assert.ok(Math.abs(right.x + right.w - 0.6) < 1e-9, "ending at the box's right edge");
+  const long = wordsSpan(ctx, name, "x".repeat(60), "Geist", 1080, 1080);
+  assert.ok(Math.abs(long.w - 0.5) < 1e-9 && Math.abs(long.x - 0.1) < 1e-9, "words longer than the box fill it");
+  const title = wordsSpan(ctx, { ...name, kind: "title", h: 0.2 }, "Shipping in public every week", "Geist", 1080, 1080);
+  assert.ok(title.w <= 0.5 + 1e-9 && title.w * 1080 >= 20 * 20, `a wrapped title spans its widest line: ${title.w * 1080}`);
+  assert.equal(wordsSpan(ctx, name, "", "Geist", 1080, 1080), null, "no words, no span");
+});

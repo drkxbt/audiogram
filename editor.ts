@@ -9,7 +9,7 @@ import { colourPanel, COLOUR_LABELS, documentColours, hexToHsv, markPicked, type
 import { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
 import { backgroundOf, defaultLayers, entranceLength, isBackgroundLayer, libraryPhotos, moveLayer, PHOTO_KEY, showCaptions, stacked, widthAnchored, type Art, type Layer, type LayerKind } from "./layers.js";
 import { createStage, type FontChoice, type StageLabels } from "./stage.js";
-import { textHeight, textWidth } from "./render.js";
+import { textHeight, textWidth, wordsSpan } from "./render.js";
 import { drawingLayer, elementTiles, matchDrawings, previewPixels, restyleSound, searchTiles, soundPart, type ElementTile, type SectionId } from "./elements.js";
 import { DEVICES } from "./paint-mockup.js";
 
@@ -1629,6 +1629,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   // One store of scratch canvases for every painter the stage gets, since a drag makes a new one at each move.
   const scratches: Painter["scratches"] = new Map();
+  let spanMeasurer: CanvasRenderingContext2D | null = null;
   let painter = new Painter(scene());
   painter.scratches = scratches;
   const ctx = preview.getContext("2d", { alpha: false })!;
@@ -1661,6 +1662,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     fonts: () => fontList,
     loadFont: (name, sample) => loadFont(name, sample).then(refit),
     textOf: (layer) => painter.textOf(layer, 0),
+    wordsSpan: (layer) => {
+      const { width, height } = SIZES[layout];
+      // A canvas of its own, made when first needed: the stage can draw before the editor's measuring one exists.
+      spanMeasurer ??= element("canvas", "").getContext("2d")!;
+      return wordsSpan(spanMeasurer, layer, painter.textOf(layer, clipTime()), options.font ?? "Geist, ui-sans-serif, system-ui, sans-serif", width, height);
+    },
     setText(layer, text) {
       if (layer.kind === "title") title = text;
       else if (layer.kind === "name") speaker = text;

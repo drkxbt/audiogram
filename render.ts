@@ -621,6 +621,26 @@ export function textWidth(ctx: CanvasRenderingContext2D, layer: Layer, text: str
   return widest / width;
 }
 
+/**
+ * Where a label's words run across its box, in frame fractions: as the painter lays them out (one line for the
+ * single-line kinds, wrapped at the box for the rest, from where they are aligned), so the editor can outline the
+ * words rather than the room the design gives them. Null when there are no words.
+ */
+export function wordsSpan(ctx: CanvasRenderingContext2D, layer: Layer, text: string, family: string, width: number, height: number): { x: number; w: number } | null {
+  const shown = shownText(layer, text).trim();
+  if (!shown) return null;
+  const unit = Math.min(width, height) / 1080;
+  typeset(ctx, layer, family, unit, layer.kind === "title" ? 700 : 400);
+  const room = layer.w * width;
+  const lines = SINGLE_LINE.has(layer.kind) || (layer.kind === "text" && layer.autoWidth) ? shown.split("\n") : textLines(ctx, shown, room);
+  // A slanted letter leans out past the width measured for it upright.
+  const lean = layer.italic ? (layer.size ?? 40) * unit * 0.2 : 0;
+  const widest = Math.min(room, Math.max(0, ...lines.map((line) => ctx.measureText(line).width)) + lean);
+  const align = layer.align ?? "left";
+  const left = align === "center" ? (room - widest) / 2 : align === "right" ? room - widest : 0;
+  return { x: layer.x + left / width, w: widest / width };
+}
+
 const easeOut = (p: number) => 1 - (1 - p) ** 3;
 // Past its size and back, the way a letter bursts in: 0 at the start, 1 at the end.
 const overshootUnit = (p: number) => 1 + 2.2 * (p - 1) ** 3 + 1.2 * (p - 1) ** 2;

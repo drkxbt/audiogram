@@ -287,12 +287,16 @@ export function drawingLayer(drawing: Drawing, layout: Layout, id: string): Laye
   return base(id, "graphic", 0, 0, 0, 0, { ...centred(layout, 0.16, w > 0 && h > 0 ? w / h : 1), art: drawing.art, color: drawing.color ?? "accent" });
 }
 
+// The most pixels a preview is painted with, zoomed in: about eight million, so a frame drawn every frame stays smooth.
+const PREVIEW_MOST = 8_000_000;
+
 /**
  * How many pixels the preview of a `frame` is painted with, when it is shown `shownWidth` CSS pixels wide on a screen
- * of `ratio` device pixels to one: as many as the screen shows, so a photo is never stretched soft, from half the frame
- * (plenty for a small preview, and a quarter of the pixels to paint) up to the frame itself.
+ * of `ratio` device pixels to one: as many as the screen shows, zoomed in past the frame's own size too, so nothing is
+ * ever stretched soft; never under half the frame (plenty for a small preview), and never over PREVIEW_MOST.
  */
 export function previewPixels(frame: { width: number; height: number }, shownWidth: number, ratio: number): { width: number; height: number } {
-  const scale = Math.min(1, Math.max(0.5, (shownWidth * ratio) / frame.width || 0));
+  const most = Math.sqrt(PREVIEW_MOST / (frame.width * frame.height));
+  const scale = Math.min(most, Math.max(0.5, (shownWidth * ratio) / frame.width || 0));
   return { width: Math.round(frame.width * scale), height: Math.round(frame.height * scale) };
 }
