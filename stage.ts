@@ -4,7 +4,7 @@
    keyboard, Tab steps through the layers on the picture and Enter types into words. */
 
 import { formatTime, parseTime } from "./captions.js";
-import { alignToPage, DIRECTED, entranceLength, isBackgroundLayer, layerAt, moveLayer, pageCovers, resizeTurned, rotateLayer, snapMove, type Ambient, type Box, type ChartKind, type Device, type Direction, type Entrance, type Guide, type Solid, type Handle, type Layer, type Loop, type PageEdge, type ShapeKind, type TextEffect } from "./layers.js";
+import { alignToPage, DIRECTED, entranceLength, isBackgroundLayer, layerAt, moveLayer, pageCovers, resizeTurned, rotateLayer, snapMove, type Ambient, type Box, type ChartKind, type Clock, type Device, type Direction, type Entrance, type Guide, type Solid, type Handle, type Layer, type Loop, type PageEdge, type ShapeKind, type TextEffect } from "./layers.js";
 import { colourPanel, COLOUR_LABELS, type ColourLabels } from "./colour.js";
 import { FILTERS, metalCss, paintOf, type Theme, type Visual } from "./render.js";
 import { element, iconButton, ICONS, keyButton } from "./ui.js";
@@ -112,6 +112,11 @@ export interface StageLabels {
   duplicated: (layer: string) => string;
   effects: string;
   shadow: string;
+  /** Shapes: frosted glass, how much of what lies under them is blurred. */
+  frost: string;
+  /** Time layers: what the clock shows, and each way it can. */
+  clock: string;
+  clockNames: Record<Clock, string>;
   outline: string;
   behind: string;
   capitals: string;
@@ -217,6 +222,8 @@ export interface StageHost {
   documentColours?(): string[];
   /** A mockup's box for another device: its middle and height kept, its width from the device's shape. */
   deviceBox?(layer: Layer, device: Device): Partial<Layer>;
+  /** A sound layer's change to another look, its box refitted when it goes between a ring and a strip. */
+  soundLook?(layer: Layer, look: Visual): Partial<Layer>;
   /** Plays the way in, the way out or the loop of some layers once on the picture, the rest held still. */
   rehearse?(ids: string[], part: "enter" | "exit" | "loop"): void;
   /** Shows a message where the user can see it, with a key that undoes or follows up what just happened. */
@@ -286,7 +293,7 @@ function recommendedFor(kind: Layer["kind"]): Entrance[] {
 const EFFECTS = ["none", "shadow", "lift", "hollow", "splice", "outline", "echo", "glitch", "neon", "background"] as const;
 const FRAMES: Array<"none" | ShapeKind> = ["none", "ellipse", "rect", "squircle", "arch", "blob", "burst", "cloud", "hexagon", "diamond", "star", "heart", "triangle", "bubble"];
 // What Copy style carries from one layer to another: its look, not its place or its words.
-const STYLE_KEYS = ["font", "size", "weight", "italic", "color", "highlight", "align", "shadow", "outline", "background", "uppercase", "effect", "effectColor", "underline", "strike", "letterSpacing", "lineHeight", "list", "fill", "stroke", "strokeWidth", "dash", "radius", "opacity", "filter", "adjust"] as const;
+const STYLE_KEYS = ["font", "size", "weight", "italic", "color", "highlight", "align", "shadow", "outline", "background", "uppercase", "effect", "effectColor", "underline", "strike", "letterSpacing", "lineHeight", "list", "fill", "stroke", "strokeWidth", "dash", "radius", "frost", "opacity", "filter", "adjust", "clock"] as const;
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 // The colours of layers the picker can set; all take a metal finish but the captions' highlight, whose words take
 // black or white by how light it is.
@@ -1542,6 +1549,43 @@ export function createStage(host: StageHost): Stage {
     openPop(anchor, labels.effects, content, focus);
   }
 
+  /** A shape's glass and shadow: how frosted it is, and a soft shadow under it. */
+  function shapeEffectsPop(anchor: HTMLElement, layer: Layer, focus?: string) {
+    const shadow = toggleKey(labels.shadow, ICONS.shadow, Boolean(layer.shadow), () => {
+      const kept = popFocus();
+      update(find(layer.id)!, { shadow: layer.shadow ? undefined : true });
+      shapeEffectsPop(toolbar.querySelector<HTMLElement>('[data-key="effects"]') ?? anchor, find(layer.id)!, kept);
+    });
+    openPop(anchor, labels.effects, [
+      slider(labels.frost, layer.frost ?? 0, (value) => replaceLayer({ ...find(layer.id)!, frost: value || undefined }, false), { max: 60, scale: 1, suffix: " px" }),
+      shadow,
+    ], focus);
+  }
+
+  /** What a time layer's clock shows: the time played and the length, the time played, the time left, or a percent. */
+  function clockPop(anchor: HTMLElement, layer: Layer, focus?: string) {
+    const ways: Clock[] = ["both", "elapsed", "remaining", "percent"];
+    const current = layer.clock ?? "both";
+    const row = element("div", "ag-segmented ag-segmented-four");
+    row.setAttribute("role", "radiogroup");
+    row.setAttribute("aria-label", labels.clock);
+    for (const way of ways) {
+      const button = element("button", "ag-segment");
+      button.type = "button";
+      button.setAttribute("role", "radio");
+      button.setAttribute("aria-checked", String(way === current));
+      button.textContent = labels.clockNames[way];
+      button.dataset.popKey = `clock:${way}`;
+      button.addEventListener("click", () => {
+        const kept = popFocus();
+        update(find(layer.id)!, { clock: way === "both" ? undefined : way });
+        clockPop(toolbar.querySelector<HTMLElement>('[data-key="clock"]') ?? anchor, find(layer.id)!, kept);
+      });
+      row.append(button);
+    }
+    openPop(anchor, labels.clock, [row], focus);
+  }
+
   /** The space between letters and between lines. */
   function spacingPop(anchor: HTMLElement, layer: Layer) {
     openPop(anchor, labels.spacing, [
@@ -2130,9 +2174,10 @@ export function createStage(host: StageHost): Stage {
 
   function stylePop(anchor: HTMLElement, layer: Layer) {
     const keys = element("div", "ag-pop-actions");
-    for (const look of ["bars", "wave", "pulse"] as Visual[]) {
+    for (const look of ["bars", "wave", "pulse", "ring"] as Visual[]) {
       keys.append(toggleKey(labels.visualNames[look], ICONS[look], (layer.visual ?? "") === look, () => {
-        update(find(layer.id)!, { visual: look });
+        const current = find(layer.id)!;
+        update(current, host.soundLook?.(current, look) ?? { visual: look });
         closePop();
         focusKey("style");
       }));
@@ -2283,6 +2328,7 @@ export function createStage(host: StageHost): Stage {
       const align = layer.align ?? "left";
       const alignKey = iconKey("align", `${labels.align}: ${labels.alignNames[align]}`, ALIGN_ICONS[align], () => update(find(layer.id)!, { align: order[(order.indexOf(align) + 1) % order.length] }));
       toolbar.append(alignKey);
+      if (layer.kind === "time") toolbar.append(popKey("clock", labels.clock, ICONS.clock, clockPop));
       if (layer.kind === "text") {
         const lists = ["none", "bullet", "number"] as const;
         const list = layer.list ?? "none";
@@ -2299,7 +2345,7 @@ export function createStage(host: StageHost): Stage {
       const fallback = layer.kind === "graphic" ? "text" : "accent";
       const mono = layer.kind !== "graphic" || (layer.art?.paths.some((part) => part.fill === "currentColor" || part.stroke === "currentColor") ?? false);
       if (mono) toolbar.append(colourKey("fill", labels.fill, swatchFill(layer[property], fallback), (anchor) => colourPop(anchor, find(layer.id)!, property, fallback)));
-      if (layer.kind === "shape") toolbar.append(popKey("border", labels.border, ICONS.border, borderPop));
+      if (layer.kind === "shape") toolbar.append(popKey("border", labels.border, ICONS.border, borderPop), popKey("effects", labels.effects, ICONS.effects, shapeEffectsPop));
       if (layer.kind === "visual") toolbar.append(popKey("style", labels.style, ICONS[layer.visual ?? "bars"], stylePop));
       if (layer.kind === "graphic") toolbar.append(popKey("flip", labels.flip, ICONS.flip, flipPop));
     } else if (layer.kind === "image" || layer.kind === "avatar") {

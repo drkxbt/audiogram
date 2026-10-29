@@ -53,6 +53,7 @@ export const ICONS = {
   bars: '<path d="M5 10v4M8.5 7v10M12 4.5v15M15.5 7v10M19 10v4"/>',
   wave: '<path d="M3 12c2 0 2-5 4-5s2 10 4 10 2-13 4-13 2 8 4 8h2"/>',
   pulse: '<circle cx="12" cy="12" r="3.5"/><circle cx="12" cy="12" r="7.5" opacity=".55"/>',
+  ring: '<circle class="fill" cx="12" cy="4" r="1.15"/><circle class="fill" cx="17.66" cy="6.34" r="1.3"/><circle class="fill" cx="20" cy="12" r="1.5"/><circle class="fill" cx="17.66" cy="17.66" r="1.75"/><circle class="fill" cx="12" cy="20" r="1.15" opacity=".35"/><circle class="fill" cx="6.34" cy="17.66" r="1.15" opacity=".35"/><circle class="fill" cx="4" cy="12" r="1.15" opacity=".35"/><circle class="fill" cx="6.34" cy="6.34" r="1.15" opacity=".35"/>',
   photo: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="m20.5 16-5-5-8 8.5"/>',
   music: '<path d="M9 17.5V6l10-2v11.5"/><circle cx="6.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="15.5" r="2.5"/>',
   design: '<rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><circle cx="16.5" cy="16.5" r="3.5"/>',

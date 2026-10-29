@@ -837,6 +837,9 @@
 .ag-segmented { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; padding: 2px; border-radius: 8px; background: var(--ag-surface); }
 .ag-segment { height: 28px; border: 0; border-radius: 6px; background: none; color: var(--ag-muted); font: inherit; font-size: 12.5px; font-weight: 500; cursor: pointer; }
 .ag-segment[aria-checked="true"] { background: var(--ag-bg); color: var(--ag-text); box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); }
+.ag-segment:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
+.ag-segmented-four { grid-template-columns: repeat(4, auto); }
+.ag-segmented-four .ag-segment { padding: 0 10px; }
 .ag-gradient-row { display: flex; align-items: center; gap: 4px; }
 .ag-gradient-row .ag-colour[aria-pressed="true"] { box-shadow: 0 0 0 2px var(--ag-bg), 0 0 0 4px var(--ag-text); }
 .ag-directions { display: flex; gap: 2px; margin-left: auto; }

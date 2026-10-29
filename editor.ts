@@ -7,10 +7,10 @@ import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
 import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
 import { colourPanel, COLOUR_LABELS, documentColours, hexToHsv, markPicked, type ColourChoice } from "./colour.js";
 import { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
-import { backgroundOf, defaultLayers, entranceLength, isBackgroundLayer, moveLayer, showCaptions, stacked, widthAnchored, type Art, type Layer, type LayerKind } from "./layers.js";
+import { backgroundOf, defaultLayers, entranceLength, isBackgroundLayer, libraryPhotos, moveLayer, PHOTO_KEY, showCaptions, stacked, widthAnchored, type Art, type Layer, type LayerKind } from "./layers.js";
 import { createStage, type FontChoice, type StageLabels } from "./stage.js";
 import { textHeight, textWidth } from "./render.js";
-import { drawingLayer, elementTiles, matchDrawings, searchTiles, type ElementTile, type SectionId } from "./elements.js";
+import { drawingLayer, elementTiles, matchDrawings, restyleSound, searchTiles, soundPart, type ElementTile, type SectionId } from "./elements.js";
 import { DEVICES } from "./paint-mockup.js";
 
 export type Tab = "design" | "elements" | "text" | "photos" | "music" | "captions" | "layers";
@@ -152,7 +152,7 @@ export interface Labels {
   frameRate: string;
   downloadNow: string;
   soundAndCaptions: string;
-  elementNames: { captions: string; bars: string; wave: string; pulse: string; time: string; avatar: string; name: string; handle: string; title: string; links: string };
+  elementNames: { captions: string; bars: string; wave: string; pulse: string; ring: string; time: string; avatar: string; name: string; handle: string; title: string; links: string };
   addText: string;
   addHeading: string;
   addSubheading: string;
@@ -222,6 +222,8 @@ export interface MediaFeed {
   name: string;
   credit: string;
   url: string;
+  /** What the search box says while this source's results fill the panel, for a source that asks to be named there. */
+  placeholder?: string;
   search(query: string, page: number): Promise<MediaPage>;
 }
 
@@ -421,7 +423,7 @@ const DEFAULT_LABELS: Labels = {
   shape: "Shape",
   layouts: { square: "Square", portrait: "Portrait", story: "Story", landscape: "Wide" },
   visual: "Sound style",
-  visuals: { bars: "Bars", wave: "Wave", pulse: "Pulse" },
+  visuals: { bars: "Bars", wave: "Wave", pulse: "Pulse", ring: "Ring" },
   colours: "Colours",
   theme: (name) => `${name} colours`,
   title: "Title",
@@ -505,6 +507,9 @@ const DEFAULT_LABELS: Labels = {
     duplicated: (layer) => `${layer} duplicated`,
     effects: "Effects",
     shadow: "Shadow",
+    frost: "Frost",
+    clock: "Clock",
+    clockNames: { both: "Both", elapsed: "Elapsed", remaining: "Remaining", percent: "Percent" },
     outline: "Outline",
     behind: "Colour behind",
     capitals: "Capitals",
@@ -539,7 +544,7 @@ const DEFAULT_LABELS: Labels = {
     paste: "Paste",
     copied: (layer) => `${layer} copied`,
     style: "Style",
-    visualNames: { bars: "Bars", wave: "Wave", pulse: "Pulse" },
+    visualNames: { bars: "Bars", wave: "Wave", pulse: "Pulse", ring: "Ring" },
     underline: "Underline",
     strike: "Strikethrough",
     list: "List",
@@ -578,7 +583,7 @@ const DEFAULT_LABELS: Labels = {
     frame: "Frame",
     frameNames: { none: "None", rect: "Square", ellipse: "Circle", triangle: "Triangle", star: "Star", heart: "Heart", arrow: "Arrow", diamond: "Diamond", bubble: "Speech", pentagon: "Pentagon", hexagon: "Hexagon", octagon: "Octagon", cross: "Cross", parallelogram: "Slant", arch: "Arch", line: "Line", burst: "Burst", sparkle: "Sparkle", squircle: "Squircle", blob: "Blob", ring: "Ring", quote: "Quote", banner: "Banner", tag: "Tag", chevron: "Chevron", cloud: "Cloud", moon: "Moon", check: "Tick" },
     filters: "Filters",
-    filterNames: { vivid: "Vivid", warm: "Warm", cool: "Cool", fade: "Faded", retro: "Retro", dramatic: "Dramatic", mono: "Mono", noir: "Noir" },
+    filterNames: { vivid: "Vivid", warm: "Warm", cool: "Cool", fade: "Faded", retro: "Retro", dramatic: "Dramatic", mono: "Mono", noir: "Noir", amber: "Amber", slate: "Slate", ash: "Ash" },
     original: "Original",
     in: "In",
     out: "Out",
@@ -698,7 +703,7 @@ const DEFAULT_LABELS: Labels = {
   frameRate: "Frames a second",
   downloadNow: "Download",
   soundAndCaptions: "Sound and captions",
-  elementNames: { captions: "Captions", bars: "Sound bars", wave: "Sound wave", pulse: "Pulse", time: "Clip time", avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", links: "Links" },
+  elementNames: { captions: "Captions", bars: "Sound bars", wave: "Sound wave", pulse: "Pulse", ring: "Sound ring", time: "Clip time", avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", links: "Links" },
   addText: "Add text",
   addHeading: "Add a heading",
   addSubheading: "Add a subheading",
@@ -1158,10 +1163,13 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     renderTemplates();
     changed();
   });
-  tiles(panes.design, labels.visual, (["bars", "wave", "pulse"] as Visual[]).map((value) => ({ value, text: labels.visuals[value], markup: ICONS[value] })), visual, (value) => {
+  tiles(panes.design, labels.visual, (["bars", "wave", "pulse", "ring"] as Visual[]).map((value) => ({ value, text: labels.visuals[value], markup: ICONS[value] })), visual, (value) => {
+    const was = visual;
     visual = value as Visual;
-    // The animation picked here is every sound layer's, the ones added with a look of their own included.
-    designs = Object.fromEntries(Object.entries(designs).map(([shape, list]) => [shape, list!.map((layer) => (layer.kind === "visual" ? { ...layer, visual: undefined } : layer))])) as typeof designs;
+    // The animation picked here is every sound layer's, the ones added with a look of their own included; one going
+    // between a ring and a strip is refitted to its new look. A default design draws its sound in a strip box, which
+    // holds a ring as large as it is tall, so it is left as it is.
+    designs = Object.fromEntries(Object.entries(designs).map(([shape, list]) => [shape, list!.map((layer) => (layer.kind === "visual" ? { ...restyleSound(layer, layer.visual ?? was, visual), visual: undefined } : layer))])) as typeof designs;
     rebuild();
     record();
     changed();
@@ -1639,6 +1647,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       }
       return { device, w, h, x: layer.x + layer.w / 2 - w / 2, y: layer.y + layer.h / 2 - h / 2 };
     },
+    soundLook(layer, look) {
+      const { x, y, w, h } = restyleSound(layer, layer.visual ?? visual, look);
+      return { visual: look, x, y, w, h };
+    },
     fonts: () => fontList,
     loadFont: (name, sample) => loadFont(name, sample).then(refit),
     textOf: (layer) => painter.textOf(layer, 0),
@@ -1795,6 +1807,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     painter.placeholderText = labels.dropPhoto;
     painter.captionsSample = animating ? "" : labels.captionsSample;
     painter.samples = animating ? {} : labels.wordSamples;
+    painter.sampleProgress = !recordings.length;
     painter.rehearse = rehearsal;
     sizePreview();
     paint();
@@ -2087,13 +2100,17 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const scale = 240 / Math.max(width, height);
     canvas.width = Math.round(width * scale);
     canvas.height = Math.round(height * scale);
+    const thumbs = photoThumbs(made.layers, () => paint());
     const paint = () => {
       // A thumbnail shows the template as it comes, without the user's background or other pictures.
-      const painter = new Painter({ ...scene(), backdrop: null, layers: made.layers, page: made.page, theme: made.theme !== undefined ? THEMES[made.theme] ?? theme : theme, overlay: undefined });
+      const base = scene();
+      const images = new Map([...(base.images ?? []), ...thumbs]);
+      const painter = new Painter({ ...base, images, backdrop: null, layers: made.layers, page: made.page, theme: made.theme !== undefined ? THEMES[made.theme] ?? theme : theme, overlay: undefined });
       painter.animate = false;
       painter.placeholders = true;
       painter.captionsSample = labels.captionsSample;
       painter.samples = labels.wordSamples;
+      painter.sampleProgress = true;
       painter.paint(canvas.getContext("2d")!, 0);
     };
     paint();
@@ -2110,6 +2127,50 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     stage.select(null);
     setLayers(made.layers.map((layer) => ({ ...layer })), true);
     void loadUsedFonts().then(refit);
+    bringPhotos();
+  }
+
+  // A template can ask for one of the library's photos by a "photo:" key. Its thumbnail shows the small version; once
+  // it is picked the full photo is read once and kept the way one picked in Photos is, under that same key.
+  const thumbCache = new Map<string, HTMLImageElement>();
+  const photosComing = new Set<string>();
+
+  /** The small version of each library photo `layers` ask for, by the key they ask with; `arrived` is called as each
+   *  one still loading comes in. */
+  function photoThumbs(layers: Layer[], arrived: () => void): Array<[string, CanvasImageSource]> {
+    return libraryPhotos(layers, library.photos).map(({ key, photo }) => {
+      let thumb = thumbCache.get(photo.thumb);
+      if (!thumb) {
+        thumb = new Image();
+        thumb.decoding = "async";
+        thumb.src = photo.thumb;
+        thumbCache.set(photo.thumb, thumb);
+      }
+      if (!thumb.complete) thumb.addEventListener("load", arrived, { once: true });
+      return [key, thumb];
+    });
+  }
+
+  /** Reads in the library photos any design asks for and doesn't have yet. One the library lacks, or that can't be
+   *  read, leaves its layer empty. */
+  function bringPhotos() {
+    const wanted = libraryPhotos(LAYOUTS.flatMap((name) => layersFor(name)), library.photos).filter(({ key }) => !pictures.has(key) && !photosComing.has(key));
+    for (const { key, photo } of wanted) {
+      photosComing.add(key);
+      void fetch(photo.url)
+        .then((response) => {
+          if (!response.ok) throw new Error(String(response.status));
+          return response.blob();
+        })
+        .then((blob) => keepPicture(blob, key, false))
+        .then(() => {
+          // The Photos row was drawn while the design's background had no picture yet.
+          if (backgroundOf(layersFor(layout))?.image === key) rowBackground = undefined;
+          rebuild();
+        })
+        .catch(() => {})
+        .finally(() => photosComing.delete(key));
+    }
   }
 
   // Elements: a row of tiles a section, each painted to show what it adds in the design's colours; See all opens a
@@ -2132,6 +2193,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let openPages = 1;
   const ROW: Partial<Record<PanelView, number>> = { shapes: 8 };
   const feedsFor = (section: MediaSection) => (library.media ?? []).filter((feed) => feed.kind === MEDIA_KIND[section]);
+  /** The source whose results fill a section of stock media opened whole. */
+  const openMediaFeed = (): MediaFeed | undefined => {
+    if (!openSection || !isMedia(openSection)) return undefined;
+    const feeds = feedsFor(openSection);
+    return feeds[Math.min(openFeed, feeds.length - 1)];
+  };
   const mediaCache = new Map<string, Promise<MediaPage>>();
   function mediaPage(feed: MediaFeed, query: string, page: number): Promise<MediaPage> {
     const key = `${feed.source}|${feed.kind}|${query}|${page}`;
@@ -2187,6 +2254,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const query = elementSearch.value.trim();
     // A set handed in again without the one that was open leaves nothing to show there.
     if (openSection && isSetView(openSection) && !setOf(openSection)) openSection = null;
+    // A source that asks to be named in the search box is named there while its results fill the panel; the box's
+    // name for screen readers stays what it does.
+    // A source that asks to be named in the search box (KLIPY's terms do) is, whenever it leads a section on show or
+    // fills the panel opened whole.
+    const leading = (Object.keys(MEDIA_KIND) as MediaSection[]).map((section) => feedsFor(section)[0]).find((feed) => feed?.placeholder);
+    elementSearch.placeholder = (openSection ? openMediaFeed()?.placeholder : leading?.placeholder) ?? labels.searchElements;
     loadShownDrawings();
     const grid = (tiles: ElementTile[]) => {
       const node = element("div", "ag-el-grid");
@@ -2313,7 +2386,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
             });
             parts.push(row);
           }
-          const feed = feeds[Math.min(openFeed, feeds.length - 1)];
+          const feed = openMediaFeed();
           if (feed) parts.push(mediaGrid(feed, query, openPages, undefined, true), credits([feed]));
         }
       }
@@ -2465,7 +2538,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }
 
   elementSearch.addEventListener("input", () => {
-    openSection = null;
+    // Typing in a stock section opened whole searches that source; anywhere else it searches every section.
+    if (openSection && isMedia(openSection)) openPages = 1;
+    else openSection = null;
     // A pause in typing before the sources are asked, so each letter doesn't send a search.
     clearTimeout(searchTimer);
     searchTimer = window.setTimeout(() => {
@@ -2576,6 +2651,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     });
     painter.animate = false;
     painter.placeholders = true;
+    // The hum is only there to move the bars; the ring and the clip time show what they would in a real clip.
+    painter.sampleProgress = true;
     // Sound bars ease towards the sound, so a few frames first let them rise to it.
     const ctx = canvas.getContext("2d")!;
     // Late in the hum, so a wave's few seconds behind the playhead are all sound.
@@ -2742,8 +2819,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         return;
       }
     }
-    const classic = defaultLayers(layout).find((layer) => layer.kind === kind);
-    if (!classic) return;
+    const found = defaultLayers(layout).find((layer) => layer.kind === kind);
+    if (!found) return;
+    const classic = soundPart(found, look, layout);
     const taken = layersFor(layout).some((layer) => layer.kind === kind && Math.abs(layer.x - classic.x) < 0.01 && Math.abs(layer.y - classic.y) < 0.01);
     addLayer({ ...(taken ? moveLayer(classic, 0.03, 0.03) : classic), id: layerId(kind), ...(look ? { visual: look } : {}) });
   }
@@ -4181,7 +4259,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     }).catch(() => {});
   }
   if (options.music) void setMusic(options.music).then(() => musicRow.show(options.music!)).catch(() => musicRow.show(null));
-  for (const [key, source] of Object.entries(options.images ?? {})) void keepPicture(source, key, true).then(() => {
+  for (const [key, source] of Object.entries(options.images ?? {})) void keepPicture(source, key, !key.startsWith(PHOTO_KEY)).then(() => {
     renderUploads();
     rebuild();
   }).catch(() => {});
@@ -4191,6 +4269,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   renderElements();
   renderPhotos();
   renderCombos();
+  bringPhotos();
   built = true;
   showBackgroundRow();
   placeCaptions();
@@ -4284,7 +4363,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       stage.refresh();
     },
     async setImages(next) {
-      await Promise.all(Object.entries(next).filter(([key]) => !pictures.has(key)).map(([key, image]) => keepPicture(image, key, !key.startsWith("photo-")).catch(() => {})));
+      await Promise.all(Object.entries(next).filter(([key]) => !pictures.has(key)).map(([key, image]) => keepPicture(image, key, !key.startsWith("photo-") && !key.startsWith(PHOTO_KEY)).catch(() => {})));
       renderUploads();
       rebuild();
     },
@@ -4296,6 +4375,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       library = next;
       renderElements();
       renderPhotos();
+      // Templates and designs that ask for library photos can find them now.
+      renderTemplates();
+      bringPhotos();
     },
     destroy() {
       stop();

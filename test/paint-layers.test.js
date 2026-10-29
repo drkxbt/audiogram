@@ -110,9 +110,26 @@ test("the classic title has room for two lines on a square, a tall and a story f
     const { ctx, calls } = canvasLog(layout === "landscape" ? 1920 : 1080, layout === "story" ? 1920 : layout === "portrait" ? 1350 : 1080);
     new Painter(scene({ layout, title: long })).paint(ctx, 1);
     const titleFont = calls.find((call) => call.op === "fillText" && long.startsWith(call.text))?.font;
-    const painted = calls.filter((call) => call.op === "fillText" && call.font === titleFont && long.includes(call.text));
+    const painted = calls.filter((call) => call.op === "fillText" && call.font === titleFont && long.includes(call.text.replace(/…$/, "")));
     assert.equal(painted.length, lines, `${layout}: ${painted.map((call) => call.text).join(" / ")}`);
+    assert.ok(painted.at(-1).text.endsWith("…"), `${layout}: the last line says there is more`);
   }
+});
+
+test("a title with more lines than its box holds ends the last one it keeps with an ellipsis, and one that fits ends as typed", () => {
+  // 40 px words measure 20 px a letter here, so the 540 px box takes 27 letters a line and its 92 px two lines.
+  const layer = { id: "t", kind: "title", x: 0, y: 0, w: 0.5, h: 92 / 1080, rotation: 0, opacity: 1, size: 40 };
+  const lines = (title) => {
+    const { ctx, calls } = canvasLog(1080, 1080);
+    new Painter(scene({ title, layers: [layer] })).paint(ctx, 1);
+    return calls.filter((call) => call.op === "fillText").map((call) => call.text);
+  };
+  // The second line is full, so its last word makes way for the ellipsis, and the comma before it goes too.
+  assert.deepEqual(lines("Shipping in public every week, all year, unfailingly and then some"), ["Shipping in public every", "week, all year…"]);
+  assert.deepEqual(lines("Shipping in public every week, all year, without fail"), ["Shipping in public every", "week, all year, without…"]);
+  assert.deepEqual(lines("Shipping in public every week"), ["Shipping in public every", "week"]);
+  assert.deepEqual(lines("Shipping in public\n\n"), ["Shipping in public"], "blank lines left out leave nothing to say");
+  assert.deepEqual(lines("Shipping in public\n\nPart two"), ["Shipping in public…"], "the ellipsis ends the last line with words, not a blank one");
 });
 
 test("the page is painted in its own colour, or its gradient, before any layer", () => {

@@ -1,5 +1,5 @@
 import { cueAt, timeWords, type Cue } from "./captions.js";
-import { defaultLayers, entranceLength, FRAME_SIZES, motionAt, UNIT_WAYS, type Adjust, type ClipFrom, type Crop, type Layer, type Motion, type Paint, type ShapeKind } from "./layers.js";
+import { defaultLayers, entranceLength, FRAME_SIZES, motionAt, PHOTO_KEY, UNIT_WAYS, type Adjust, type ClipFrom, type Clock, type Crop, type Layer, type Motion, type Paint, type ShapeKind } from "./layers.js";
 import { rms, Smoother, spectrum } from "./wave.js";
 import type { PaintEnv } from "./paint-env.js";
 import { paintAmbient } from "./paint-ambient.js";
@@ -10,7 +10,7 @@ import { paintSolid } from "./paint-solid.js";
 import { paintTable } from "./paint-table.js";
 
 export type Layout = "square" | "portrait" | "story" | "landscape";
-export type Visual = "bars" | "wave" | "pulse";
+export type Visual = "bars" | "wave" | "pulse" | "ring";
 
 /** Video sizes: square and 4:5 for feeds, 9:16 for TikTok, Reels and Shorts, 16:9 for YouTube and LinkedIn. */
 export const SIZES: Record<Layout, { width: number; height: number }> = FRAME_SIZES;
@@ -115,6 +115,16 @@ export function clock(seconds: number): string {
   const minutes = Math.floor(whole / 60);
   const ss = String(whole % 60).padStart(2, "0");
   return minutes >= 60 ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}:${ss}` : `${minutes}:${ss}`;
+}
+
+/** The clip's time as a time layer shows it, `time` seconds into a clip `duration` seconds long. */
+function clockText(format: Clock | undefined, time: number, duration: number): string {
+  const at = Math.min(duration, Math.max(0, time));
+  if (format === "elapsed") return clock(at);
+  // Counted down from the length in whole seconds, so the time played and the time left add up to the length shown.
+  if (format === "remaining") return `-${clock(Math.max(0, Math.round(duration) - Math.floor(at)))}`;
+  if (format === "percent") return `${duration > 0 ? Math.round((at / duration) * 100) : 0}%`;
+  return `${clock(at)} / ${clock(Math.round(duration))}`;
 }
 
 /** Breaks text into lines no wider than `maxWidth` in the current font. */
@@ -377,6 +387,11 @@ export const FILTERS: Record<string, string> = {
   dramatic: "contrast(1.42) saturate(1.18) brightness(0.92)",
   mono: "grayscale(1) contrast(1.08)",
   noir: "grayscale(1) contrast(1.55) brightness(0.9)",
+  // One tone each, like a toned print: warm gold as through a foggy sunrise, a cool blue-grey, and a soft grey whose
+  // blacks are lifted.
+  amber: "grayscale(1) sepia(1) hue-rotate(6deg) saturate(1.4) contrast(0.86) brightness(1.06)",
+  slate: "grayscale(1) sepia(0.5) hue-rotate(175deg) saturate(0.9) contrast(0.94) brightness(1.02)",
+  ash: "grayscale(1) contrast(0.78) brightness(1.1)",
 };
 
 /** A border's dashes for its width: none, long dashes, or round dots. */
@@ -396,6 +411,64 @@ export function filterOf(adjust: Adjust, unit: number): string {
   if (adjust.saturation !== undefined && adjust.saturation !== 1) parts.push(`saturate(${adjust.saturation})`);
   if (adjust.blur) parts.push(`blur(${Math.round(adjust.blur * unit * 10) / 10}px)`);
   return parts.join(" ") || "none";
+}
+
+/** A canvas `width` by `height` to draw on off screen, or null where none can be made. */
+function newCanvas(width: number, height: number): { canvas: HTMLCanvasElement | OffscreenCanvas; ctx: CanvasRenderingContext2D } | null {
+  const canvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(width, height) : typeof document !== "undefined" ? Object.assign(document.createElement("canvas"), { width, height }) : null;
+  const ctx = canvas?.getContext("2d") as CanvasRenderingContext2D | null | undefined;
+  return canvas && ctx ? { canvas, ctx } : null;
+}
+
+/**
+ * Draws `area` of `source` into the top left of `target`, blurred by `radius` pixels. Where the canvas has no filters
+ * (older Safari) it is shrunk to a few pixels and drawn back up instead, which softens it about as much.
+ */
+function blurInto(target: CanvasRenderingContext2D, source: HTMLCanvasElement | OffscreenCanvas, area: Box, radius: number, spare: (name: "edge" | "small", width: number, height: number) => CanvasRenderingContext2D | null): boolean {
+  // A blur reads about two and a half times its radius round each pixel, and past the source's edge there is nothing
+  // to read: glass touching the frame's edge would fade to clear there and show the sharp picture under it. Where the
+  // area meets that edge its last pixels are stretched out that far first; elsewhere the caller copied real ones.
+  const reach = Math.ceil(radius * 2.5);
+  const left = area.x <= 0 ? reach : 0;
+  const top = area.y <= 0 ? reach : 0;
+  const right = area.x + area.width >= source.width ? reach : 0;
+  const bottom = area.y + area.height >= source.height ? reach : 0;
+  let from: CanvasImageSource = source;
+  let whole: Box = area;
+  if (left || top || right || bottom) {
+    whole = { x: 0, y: 0, width: area.width + left + right, height: area.height + top + bottom };
+    const edge = spare("edge", whole.width, whole.height);
+    if (!edge) return false;
+    // The area in the middle, its edge columns and rows stretched across the sides, its corner pixels over the corners.
+    // Unsmoothed, so a stretched pixel stays its own colour rather than blending with the clear canvas round it.
+    edge.imageSmoothingEnabled = false;
+    const columns = [[area.x, 1, 0, left], [area.x, area.width, left, area.width], [area.x + area.width - 1, 1, left + area.width, right]];
+    const rows = [[area.y, 1, 0, top], [area.y, area.height, top, area.height], [area.y + area.height - 1, 1, top + area.height, bottom]];
+    for (const [sx, sw, dx, dw] of columns) for (const [sy, sh, dy, dh] of rows) if (dw > 0 && dh > 0) edge.drawImage(source, sx, sy, sw, sh, dx, dy, dw, dh);
+    edge.imageSmoothingEnabled = true;
+    from = edge.canvas;
+  }
+  // Without filters the property is missing from the context's prototype; an own one would only be a leftover value.
+  if ("filter" in Object.getPrototypeOf(target)) {
+    // All of it is blurred, so the stretched edges are read; only the area itself lands in the top left.
+    target.filter = `blur(${Math.round(radius * 10) / 10}px)`;
+    target.drawImage(from, whole.x, whole.y, whole.width, whole.height, -left, -top, whole.width, whole.height);
+    target.filter = "none";
+    return true;
+  }
+  // Shrunk by twice the radius and stretched back, a picture comes out about as soft as a blur of that radius.
+  const step = Math.max(2, radius * 2);
+  const width = Math.max(1, Math.round(whole.width / step));
+  const height = Math.max(1, Math.round(whole.height / step));
+  const tiny = spare("small", width, height);
+  if (!tiny) return false;
+  tiny.imageSmoothingEnabled = true;
+  tiny.imageSmoothingQuality = "high";
+  tiny.drawImage(from, whole.x, whole.y, whole.width, whole.height, 0, 0, width, height);
+  target.imageSmoothingEnabled = true;
+  target.imageSmoothingQuality = "high";
+  target.drawImage(tiny.canvas, 0, 0, width, height, -left, -top, whole.width, whole.height);
+  return true;
 }
 
 /** A linear gradient across a box at a CSS angle: 90 runs left to right, 180 top to bottom. */
@@ -498,6 +571,19 @@ function textLines(ctx: CanvasRenderingContext2D, text: string, width: number): 
   return text.split("\n").flatMap((part) => (part.trim() ? wrap(ctx, part, width) : [""]));
 }
 
+/** A line ended with an ellipsis, to say words follow that there is no room for: as much of it as fits `width` with the
+ *  ellipsis after, whole words first. */
+function cutShort(ctx: CanvasRenderingContext2D, line: string, width: number): string {
+  // A comma or a stop before the ellipsis reads as a typo.
+  const end = (text: string) => text.replace(/[\s,.;:!?–—-]+$/u, "");
+  let kept = end(line);
+  while (kept && ctx.measureText(`${kept}…`).width > width) {
+    const space = kept.lastIndexOf(" ");
+    kept = end(space > 0 ? kept.slice(0, space) : [...kept].slice(0, -1).join(""));
+  }
+  return `${kept}…`;
+}
+
 /** Words as a layer shows them: in capitals when it says so, each line typed a bullet or a number of a list. */
 export function shownText(layer: Layer, text: string): string {
   let shown = layer.uppercase ? text.toLocaleUpperCase() : text;
@@ -558,6 +644,14 @@ function uncover(ctx: CanvasRenderingContext2D, box: Box, clip: number, from: Cl
 // Layers drawn as one line, centred in their box; titles and free text wrap down from the top of theirs.
 const SINGLE_LINE = new Set(["name", "handle", "links", "time"]);
 
+// The sound ring: its dots, and how many of the newest lit ones glow as the head of a comet.
+const RING_DOTS = 60;
+const RING_HEAD = 4;
+// The point a still frame with no clip of its own shows the ring and the clock at: most of the way through a minute,
+// so a thumbnail, or a design before there is a recording, reads as the design.
+const SAMPLE_LENGTH = 60;
+const SAMPLE_SHARE = 0.7;
+
 /**
  * Paints frames of a clip. It keeps a little state from frame to frame, so the bars ease the way a meter does; paint
  * frames in order, and call `reset()` after jumping to another time.
@@ -582,6 +676,9 @@ export class Painter {
   /** Some layers playing one movement on their own while the rest stay still: `at` seconds into their way in, way out
    *  or loop. Set only while the editor shows a movement once; an export never sets it. */
   rehearse: { ids: Set<string>; part: "enter" | "exit" | "loop"; at: number } | null = null;
+  /** Whether the ring and every time layer show the same sample point, whatever the time, as there is no clip of its
+   *  own to follow: for a template's or an element's thumbnail, and in the editor before a recording is open. */
+  sampleProgress = false;
 
   /** Whether the editing aids show: placeholders asked for, and the picture held still rather than playing. */
   private get editing(): boolean {
@@ -607,6 +704,12 @@ export class Painter {
   /** The clip's length in seconds. */
   get duration(): number {
     return Math.max(0, this.scene.audio.end - this.scene.audio.start);
+  }
+
+  /** How far into how long a clip the ring and the clock show at `time`: the playhead, or the sample point. One source
+   *  for both, so a lit ring never sits round a clock that says it hasn't started. */
+  private progress(time: number): { at: number; length: number } {
+    return this.sampleProgress ? { at: SAMPLE_LENGTH * SAMPLE_SHARE, length: SAMPLE_LENGTH } : { at: time, length: this.duration };
   }
 
   paint(ctx: CanvasRenderingContext2D, time: number): void {
@@ -683,6 +786,8 @@ export class Painter {
     if (motion.scale !== 1 || motion.sx !== 1) ctx.scale(motion.scale * motion.sx, motion.scale);
     const blur = motion.blur ? `blur(${Math.round(motion.blur * unit * 10) / 10}px)` : "";
     if (blur) ctx.filter = blur;
+    // Glass and a shape's shadow go down on the canvas itself, under the shape, whatever else the layer is doing.
+    if (layer.kind === "shape" && layer.shape !== "line" && (layer.frost || layer.shadow)) this.paintGlass(ctx, layer, box, unit, motion.alpha);
     const shine = motion.shine !== null ? this.shineCanvas(w, h) : null;
     if (shine) {
       // The layer is drawn on a canvas of its own, so the band of light lands on its letters or shape and nowhere else.
@@ -742,12 +847,113 @@ export class Painter {
     const width = Math.ceil(w + spare * 2);
     const height = Math.ceil(h + spare * 2);
     if (!this.shine || this.shine.canvas.width < width || this.shine.canvas.height < height) {
-      const canvas = typeof OffscreenCanvas !== "undefined" ? new OffscreenCanvas(width, height) : typeof document !== "undefined" ? Object.assign(document.createElement("canvas"), { width, height }) : null;
-      const own = canvas?.getContext("2d") as CanvasRenderingContext2D | null | undefined;
-      if (!canvas || !own) return null;
-      this.shine = { canvas, ctx: own, spare };
+      const made = newCanvas(width, height);
+      if (!made) return null;
+      this.shine = { ...made, spare };
     }
     return { ...this.shine, spare, width, height };
+  }
+
+  private scratches = new Map<string, { canvas: HTMLCanvasElement | OffscreenCanvas; ctx: CanvasRenderingContext2D }>();
+
+  /** A canvas kept between frames under `name`, at least `width` by `height`, cleared and set back to plain drawing;
+   *  null where none can be made. */
+  private scratch(name: string, width: number, height: number): CanvasRenderingContext2D | null {
+    let kept = this.scratches.get(name);
+    if (!kept || kept.canvas.width < width || kept.canvas.height < height) {
+      const made = newCanvas(Math.max(width, kept?.canvas.width ?? 0), Math.max(height, kept?.canvas.height ?? 0));
+      if (!made) return null;
+      this.scratches.set(name, (kept = made));
+    }
+    const own = kept.ctx;
+    own.setTransform(1, 0, 0, 1, 0, 0);
+    own.globalAlpha = 1;
+    own.globalCompositeOperation = "source-over";
+    own.shadowColor = "transparent";
+    own.clearRect(0, 0, width, height);
+    return own;
+  }
+
+  /**
+   * What a shape lays down before its fill: a soft shadow, outside its outline only so a see-through fill stays clear,
+   * and for frosted glass a blurred copy of everything painted under it so far, cut to its outline. Only the shape's
+   * own box, and the margin a blur reaches, is copied. Both follow the layer's movement in `fade`; the glass leaves out
+   * the layer's opacity, which is there to set how strongly the fill tints it.
+   */
+  private paintGlass(ctx: CanvasRenderingContext2D, layer: Layer, box: Box, unit: number, fade: number) {
+    const m = ctx.getTransform?.();
+    if (!m || !Number.isFinite(m.a)) return;
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const [x, y] of [[box.x, box.y], [box.x + box.width, box.y], [box.x, box.y + box.height], [box.x + box.width, box.y + box.height]]) {
+      xs.push(m.a * x + m.c * y + m.e);
+      ys.push(m.b * x + m.d * y + m.f);
+    }
+    // The box as it lands on the canvas, grown by `spare` pixels each way and kept on the canvas.
+    const around = (spare: number): Box | null => {
+      const x = Math.max(0, Math.floor(Math.min(...xs) - spare));
+      const y = Math.max(0, Math.floor(Math.min(...ys) - spare));
+      const width = Math.min(ctx.canvas.width, Math.ceil(Math.max(...xs) + spare)) - x;
+      const height = Math.min(ctx.canvas.height, Math.ceil(Math.max(...ys) + spare)) - y;
+      return width > 0 && height > 0 ? { x, y, width, height } : null;
+    };
+    const corner = (layer.radius ?? 0) * Math.min(box.width, box.height);
+    const outline = (on: CanvasRenderingContext2D) => shapePath(on, layer.shape, box, corner);
+    // A scratch canvas laid on this one pixel for pixel, inside whatever clip the layer already has.
+    const lay = (from: CanvasRenderingContext2D, area: Box, alpha: number) => {
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = alpha;
+      ctx.filter = "none";
+      ctx.drawImage(from.canvas, 0, 0, area.width, area.height, area.x, area.y, area.width, area.height);
+      ctx.restore();
+    };
+    const shadowAlpha = layer.frost ? fade : ctx.globalAlpha;
+
+    // Taken before the shadow goes down: glass shows what was under it, not its own shadow.
+    const blur = Math.min(60, Math.max(0, layer.frost ?? 0)) * unit;
+    let glass: { from: CanvasRenderingContext2D; area: Box } | null = null;
+    if (blur >= 0.5) {
+      // A blur draws from about two and a half times its radius, so that much more round the box is copied with it.
+      const area = around(blur * 2.5);
+      const own = area && this.scratch("frost", area.width, area.height);
+      if (area && own && blurInto(own, ctx.canvas, area, blur, (name, width, height) => this.scratch(`frost-${name}`, width, height))) glass = { from: own, area };
+    }
+
+    if (layer.shadow) {
+      const soft = Math.min(44 * unit, Math.max(8 * unit, Math.min(box.width, box.height) * 0.12));
+      const drop = soft * 0.4;
+      const area = around(soft * 1.6 + drop);
+      const own = area && this.scratch("shadow", area.width, area.height);
+      if (area && own) {
+        // The shape is drawn off to the side with its shadow cast back into place, so only the shadow lands; then the
+        // outline is cut out of it.
+        const away = area.width + soft * 4;
+        own.setTransform(m.a, m.b, m.c, m.d, m.e - area.x + away, m.f - area.y);
+        own.shadowColor = "rgba(0, 0, 0, 0.24)";
+        own.shadowBlur = soft;
+        own.shadowOffsetX = -away;
+        own.shadowOffsetY = drop;
+        own.fillStyle = "#000000";
+        outline(own);
+        own.fill();
+        own.shadowColor = "transparent";
+        own.setTransform(m.a, m.b, m.c, m.d, m.e - area.x, m.f - area.y);
+        own.globalCompositeOperation = "destination-out";
+        outline(own);
+        own.fill();
+        own.globalCompositeOperation = "source-over";
+        lay(own, area, shadowAlpha);
+      }
+    }
+
+    if (glass) {
+      ctx.save();
+      outline(ctx);
+      ctx.clip();
+      lay(glass.from, glass.area, fade);
+      ctx.restore();
+    }
   }
 
   /** What a layer shows, drawn in its own box about the origin. */
@@ -770,7 +976,9 @@ export class Painter {
         const tone = [layer.filter ? FILTERS[layer.filter] ?? "" : "", layer.adjust ? filterOf(layer.adjust, unit) : "", blur].filter((part) => part && part !== "none").join(" ");
         if (tone) ctx.filter = tone;
         drawCover(ctx, image, box, layer.crop);
-      } else if (this.editing) paintPlaceholder(ctx, box, unit, this.placeholderText, layer.mask ?? "rect", (layer.radius ?? 0) * Math.min(w, h));
+        // A library photo still on its way, or one the library doesn't have, leaves its place empty rather than asking
+        // for a picture.
+      } else if (this.editing && !layer.image?.startsWith(PHOTO_KEY)) paintPlaceholder(ctx, box, unit, this.placeholderText, layer.mask ?? "rect", (layer.radius ?? 0) * Math.min(w, h));
       ctx.restore();
       if (layer.strokeWidth) {
         shapePath(ctx, layer.mask ?? "rect", box, (layer.radius ?? 0) * Math.min(w, h));
@@ -1025,7 +1233,10 @@ export class Painter {
     if (layer.kind === "handle") return scene.handle;
     if (layer.kind === "title") return scene.title;
     if (layer.kind === "links") return (scene.links ?? []).map((link) => link.trim()).filter(Boolean).slice(0, 3).join("  ·  ");
-    if (layer.kind === "time") return `${clock(Math.min(this.duration, Math.max(0, time)))} / ${clock(Math.round(this.duration))}`;
+    if (layer.kind === "time") {
+      const { at, length } = this.progress(time);
+      return clockText(layer.clock, at, length);
+    }
     return layer.text ?? "";
   }
 
@@ -1055,8 +1266,18 @@ export class Painter {
       const lineHeight = size * (layer.lineHeight ?? 1.15);
       // Words in a box that hugs them break only where a line was typed: rounding at a smaller preview never wraps them.
       let wrapped = layer.kind === "text" && layer.autoWidth ? text.split("\n") : textLines(ctx, text, box.width);
-      // A title keeps to the lines its box has room for; free text runs as long as it is.
-      if (layer.kind === "title") wrapped = wrapped.slice(0, Math.max(1, Math.floor(box.height / lineHeight + 0.05)));
+      // A title keeps to the lines its box has room for, the last one cut short where words are left out; free text
+      // runs as long as it is.
+      if (layer.kind === "title") {
+        const room = Math.max(1, Math.floor(box.height / lineHeight + 0.05));
+        const cut = wrapped.slice(room).some((line) => line.trim());
+        wrapped = wrapped.slice(0, room);
+        if (cut) {
+          // The ellipsis ends the last kept line with words in it; blank lines after it would only push it apart.
+          while (wrapped.length > 1 && !wrapped.at(-1)!.trim()) wrapped.pop();
+          wrapped[wrapped.length - 1] = cutShort(ctx, wrapped.at(-1)!, box.width);
+        }
+      }
       lines = wrapped.map((line, index) => ({ text: line, y: box.y + index * lineHeight }));
     }
     // Letters spreading in: the lines are already laid out, so they widen about their alignment without rewrapping.
@@ -1208,6 +1429,8 @@ export class Painter {
       return;
     }
 
+    if (visual === "ring") return this.paintRing(ctx, area, time, meter);
+
     if (visual === "wave") {
       // The last few seconds of loudness, scrolling left, mirrored about the middle.
       const span = 4;
@@ -1247,6 +1470,68 @@ export class Painter {
     ctx.beginPath();
     ctx.arc(cx, middle, base * 0.86, 0, Math.PI * 2);
     ctx.fill();
+  }
+
+  /**
+   * A ring of dots round the middle of the box, lit in the layer's colour as far as the clip has played: the newest few
+   * brighter and a little larger, like the head of a comet, the ones still to come dim. Each lit dot swells with the
+   * voice in its own band, low pitches at the top and mirrored down both sides.
+   */
+  private paintRing(ctx: CanvasRenderingContext2D, area: Box, time: number, meter: Smoother) {
+    const { audio } = this.scene;
+    const alpha = ctx.globalAlpha;
+    const center = Math.round((audio.start + time) * audio.sampleRate);
+    const size = audio.sampleRate > 30000 ? 2048 : 1024;
+    const bands = meter.next(spectrum(audio.samples, audio.sampleRate, center, { size, bands: RING_DOTS / 2, low: 90, high: 5000 }));
+    const { at, length } = this.progress(time);
+    const played = length > 0 ? Math.min(1, Math.max(0, at / length)) : 0;
+    // In a strip the ring opens out into a row of dots across it, so a sound style picked for the whole design suits a
+    // ring's square and a strip's slot alike.
+    if (area.width >= area.height * 2.5) {
+      const count = Math.max(12, Math.min(RING_DOTS, Math.round(area.width / (area.height * 0.9))));
+      const lit = Math.floor(played * count + 1e-6);
+      const gap = area.width / count;
+      const dot = Math.min(gap * 0.22, area.height * 0.2);
+      for (let i = 0; i < count; i++) {
+        let shade = 0.2;
+        let grow = 1;
+        if (i < lit) {
+          const head = Math.max(0, 1 - (lit - 1 - i) / RING_HEAD);
+          const voice = bands[Math.min(bands.length - 1, Math.floor((i / count) * bands.length))] ?? 0;
+          shade = 0.72 + 0.28 * head;
+          grow = (1 + 0.35 * head) * (1 + 0.4 * voice);
+        }
+        ctx.globalAlpha = alpha * shade;
+        ctx.beginPath();
+        ctx.arc(area.x + gap * (i + 0.5), area.y + area.height / 2, Math.min(dot * grow, gap / 2), 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = alpha;
+      return;
+    }
+    const lit = Math.floor(played * RING_DOTS + 1e-6);
+    const outer = Math.min(area.width, area.height) / 2;
+    const dot = outer * 0.03;
+    // Room inside the box for the largest a dot gets: the head, swollen with a loud voice.
+    const reach = outer - dot * 2;
+    const cx = area.x + area.width / 2;
+    const cy = area.y + area.height / 2;
+    for (let i = 0; i < RING_DOTS; i++) {
+      const angle = -Math.PI / 2 + (i / RING_DOTS) * Math.PI * 2;
+      let shade = 0.2;
+      let grow = 1;
+      if (i < lit) {
+        const head = Math.max(0, 1 - (lit - 1 - i) / RING_HEAD);
+        const voice = bands[Math.min(bands.length - 1, i, RING_DOTS - i)] ?? 0;
+        shade = 0.72 + 0.28 * head;
+        grow = (1 + 0.35 * head) * (1 + 0.4 * voice);
+      }
+      ctx.globalAlpha = alpha * shade;
+      ctx.beginPath();
+      ctx.arc(cx + Math.cos(angle) * reach, cy + Math.sin(angle) * reach, dot * grow, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.globalAlpha = alpha;
   }
 
   private paintCaptions(ctx: CanvasRenderingContext2D, area: Box, time: number, layer: Layer, font: string, unit: number) {

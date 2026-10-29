@@ -166,11 +166,32 @@ const AMBIENTS: Array<[Ambient, string, string]> = [
   ["grain", "Film grain", "noise texture"],
 ];
 
+/** A sound part where the classic layout puts it; a ring reads best round, so it gets a square of its own there. */
+export function soundPart(classic: Layer, look: Visual | undefined, layout: Layout): Layer {
+  if (look !== "ring") return classic;
+  const { width, height } = FRAME_SIZES[layout];
+  const side = Math.min(width, height) * 0.32;
+  return { ...classic, x: classic.x + classic.w / 2 - side / width / 2, y: classic.y + classic.h / 2 - side / height / 2, w: side / width, h: side / height };
+}
+
+/**
+ * A sound layer changed from one look to another. A ring sits in a square and the bars, wave and pulse in a strip, so a
+ * change between the two refits the box about its middle; a change within either keeps it.
+ */
+export function restyleSound(layer: Layer, from: Visual, to: Visual): Layer {
+  // A strip keeps its box as a ring, which the painter draws as a row of dots there: growing it into a round ring would
+  // cover the words a template sets around its strip. A ring becomes a strip along its own foot, clear of a clock or
+  // a photo in its middle.
+  if (from !== "ring" || to === "ring") return layer;
+  const h = layer.h / 5;
+  return { ...layer, y: layer.y + layer.h - h, h };
+}
+
 /** Every entry of the panel, section by section. `parts` names the clip's own parts in the editor's words. */
-export function elementTiles(parts: Record<"captions" | "bars" | "wave" | "pulse" | "time" | "avatar" | "name" | "handle" | "title" | "links", string>): ElementTile[] {
+export function elementTiles(parts: Record<"captions" | "bars" | "wave" | "pulse" | "ring" | "time" | "avatar" | "name" | "handle" | "title" | "links", string>): ElementTile[] {
   const tiles: ElementTile[] = [];
   const sound: Array<[keyof typeof parts, Layer["kind"], Visual?]> = [
-    ["captions", "captions"], ["bars", "visual", "bars"], ["wave", "visual", "wave"], ["pulse", "visual", "pulse"], ["time", "time"],
+    ["captions", "captions"], ["bars", "visual", "bars"], ["wave", "visual", "wave"], ["pulse", "visual", "pulse"], ["ring", "visual", "ring"], ["time", "time"],
     ["avatar", "avatar"], ["name", "name"], ["handle", "handle"], ["title", "title"], ["links", "links"],
   ];
   for (const [key, kind, look] of sound) {
@@ -182,7 +203,7 @@ export function elementTiles(parts: Record<"captions" | "bars" | "wave" | "pulse
       part: { kind, look },
       make: (layout, newId) => {
         const classic = defaultLayers(layout).find((layer) => layer.kind === kind);
-        return classic ? [{ ...classic, id: newId(kind), ...(look ? { visual: look } : {}) }] : [];
+        return classic ? [{ ...soundPart(classic, look, layout), id: newId(kind), ...(look ? { visual: look } : {}) }] : [];
       },
     });
   }

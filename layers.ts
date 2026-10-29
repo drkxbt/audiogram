@@ -50,6 +50,10 @@ export const UNIT_WAYS: Partial<Record<Entrance, "word" | "letter">> = { ascend:
 /** The ways in that take a direction, and the one each takes when none is set. */
 export const DIRECTED: Partial<Record<Entrance, Direction>> = { rise: "up", pan: "right", slide: "right", wipe: "right", drift: "right", shift: "right", roll: "right", skate: "right", tectonic: "right", fall: "down", baseline: "up" };
 
+/** How a time layer shows the clip's time: played and length ("0:16 / 1:00"), played ("0:16"), still to play ("-0:44"),
+ *  or the share played ("27%"). */
+export type Clock = "both" | "elapsed" | "remaining" | "percent";
+
 /** A look for words, one at a time, beyond the shadow, outline and colour behind them. */
 export type TextEffect = "lift" | "hollow" | "splice" | "echo" | "glitch" | "neon";
 
@@ -115,7 +119,8 @@ export interface Layer {
   flipX?: boolean;
   flipY?: boolean;
   adjust?: Adjust;
-  /** Words: a soft shadow under them, an outline round each letter, a colour behind each line, all in capitals. */
+  /** Words: a soft shadow under them, an outline round each letter, a colour behind each line, all in capitals. A shape
+   *  takes the shadow too, soft and faint under its outline. */
   shadow?: boolean;
   outline?: Paint;
   background?: Paint;
@@ -136,6 +141,11 @@ export interface Layer {
   stroke?: Paint;
   strokeWidth?: number;
   dash?: "solid" | "dashed" | "dotted";
+  /** Shapes: frosted glass. What lies under the shape shows through it blurred by this many pixels of a 1080 frame, 0
+   *  to 60, tinted by its fill; the layer's opacity sets how strong the tint is, not the glass. */
+  frost?: number;
+  /** Time layers: what the clock shows; both when left out. */
+  clock?: Clock;
   arrowStart?: boolean;
   arrowEnd?: boolean;
   /** Lines: round ends, and a bend through the box from -100 (bowed down) to 100 (bowed up). */
@@ -198,6 +208,23 @@ export interface Box {
   y: number;
   w: number;
   h: number;
+}
+
+/** An image key that asks for one of the host's library photos by its id, as a template puts one in: "photo:" and the
+ *  id. The picture is kept under the key itself once it is brought in. */
+export const PHOTO_KEY = "photo:";
+
+/** The library photos a set of layers asks for, each once, with the key it is drawn under. An id the library doesn't
+ *  have is left out, so its layer just draws nothing. */
+export function libraryPhotos<T extends { id: string }>(layers: ReadonlyArray<Pick<Layer, "image">>, photos: readonly T[] = []): Array<{ key: string; photo: T }> {
+  const found = new Map<string, T>();
+  for (const { image } of layers) {
+    if (!image?.startsWith(PHOTO_KEY) || found.has(image)) continue;
+    const id = image.slice(PHOTO_KEY.length);
+    const photo = photos.find((item) => item.id === id);
+    if (photo) found.set(image, photo);
+  }
+  return [...found].map(([key, photo]) => ({ key, photo }));
 }
 
 /** The theme colours a layer can name instead of a CSS colour. */
