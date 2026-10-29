@@ -1524,6 +1524,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   function selectTab(next: Tab) {
     if (next === "elements" && tab !== next && built) renderElements();
     tab = next;
+    if (next === "elements") loadLogos();
     root.dataset.tab = next;
     tabButtons.forEach((button, index) => {
       const on = TABS[index] === next;
@@ -2126,7 +2127,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   function renderElements() {
     const query = elementSearch.value.trim();
-    loadLogos();
+    // The logo set is a few megabytes, so it's read when someone first opens Elements, not with the editor.
+    if (tab === "elements") loadLogos();
     const grid = (tiles: ElementTile[]) => {
       const node = element("div", "ag-el-grid");
       node.append(...tiles.map(elementTile));
