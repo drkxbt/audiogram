@@ -1,8 +1,10 @@
 /* What the Elements panel offers, in sections: the clip's own parts, shapes, lines, photo frames and grids, charts,
    tables, mockups, 3D shapes and moving backgrounds. Each entry knows its name, the words it is found by, and the
-   layers it adds, laid out for the frame it goes on. Free of the DOM, so it can be tested on its own. */
+   layers it adds, laid out for the frame it goes on. The drawings a host's sets bring are searched and placed here
+   too. Free of the DOM, so it can be tested on its own. */
 import { defaultLayers, FRAME_SIZES, type Ambient, type ChartKind, type Device, type Layer, type ShapeKind, type Solid } from "./layers.js";
 import type { Layout, Visual } from "./render.js";
+import type { Drawing } from "./editor.js";
 import { ambientLayer } from "./paint-ambient.js";
 import { chartLayer } from "./paint-chart.js";
 import { mockupLayer } from "./paint-mockup.js";
@@ -271,4 +273,22 @@ export function searchTiles(tiles: ElementTile[], query: string): ElementTile[] 
     const own = `${tile.name} ${tile.tags} ${tile.section}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
     return words.every((word) => own.some((part) => part.startsWith(word)));
   });
+}
+
+/** The drawings a search finds, in the order given: every word typed has to start a word of the name, a tag, or the
+ *  id. Names are split on any letter or digit of any script, so a brand like Škoda is found by its own spelling. */
+export function matchDrawings(drawings: Drawing[], query: string): Drawing[] {
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!words.length) return drawings;
+  return drawings.filter((drawing) => {
+    const own = [...drawing.name.toLowerCase().split(/[^\p{L}\p{N}]+/u), ...(drawing.tags ?? []).map((tag) => tag.toLowerCase()), drawing.id.toLowerCase()].filter(Boolean);
+    return words.every((word) => own.some((part) => part.startsWith(word)));
+  });
+}
+
+/** A drawing on the page as a graphic, its shape kept, its longer side a sixth of the page's shorter side, in the
+ *  middle. Without a colour of its own it takes the accent, the colour a new shape gets. */
+export function drawingLayer(drawing: Drawing, layout: Layout, id: string): Layer {
+  const { w, h } = drawing.art;
+  return base(id, "graphic", 0, 0, 0, 0, { ...centred(layout, 0.16, w > 0 && h > 0 ? w / h : 1), art: drawing.art, color: drawing.color ?? "accent" });
 }

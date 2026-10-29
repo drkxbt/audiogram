@@ -857,8 +857,13 @@ export class Painter {
     const tint = (paint: string) => (paint === "currentColor" ? own : paint);
     ctx.lineCap = "round";
     ctx.lineJoin = "round";
+    const alpha = ctx.globalAlpha;
     for (const part of art.paths) {
       const path = new Path2D(part.d);
+      // Set for every path, so one path's fade never carries to the next; the canvas ignores an alpha out of range,
+      // which would keep the last one, so it is held to 0..1.
+      const fade = part.opacity ?? 1;
+      ctx.globalAlpha = alpha * (Number.isFinite(fade) ? Math.min(1, Math.max(0, fade)) : 1);
       if (part.fill && part.fill !== "none") {
         ctx.fillStyle = tint(part.fill);
         ctx.fill(path, part.rule ?? "nonzero");
@@ -869,6 +874,7 @@ export class Painter {
         ctx.stroke(path);
       }
     }
+    ctx.globalAlpha = alpha;
   }
 
   /** A straight line across the middle of its box, in its colour and weight, with an arrowhead at either end. */

@@ -53,11 +53,12 @@ export const DIRECTED: Partial<Record<Entrance, Direction>> = { rise: "up", pan:
 /** A look for words, one at a time, beyond the shadow, outline and colour behind them. */
 export type TextEffect = "lift" | "hollow" | "splice" | "echo" | "glitch" | "neon";
 
-/** A drawing made of paths in a `w` by `h` box; "currentColor" in a path takes the layer's colour. */
+/** A drawing made of paths in a `w` by `h` box; "currentColor" in a path takes the layer's colour. A path's `opacity`
+ *  is a fraction of the layer's own, as shaded emoji use for their highlights. */
 export interface Art {
   w: number;
   h: number;
-  paths: Array<{ d: string; fill?: string; stroke?: string; width?: number; rule?: "evenodd" }>;
+  paths: Array<{ d: string; fill?: string; stroke?: string; width?: number; rule?: "evenodd"; opacity?: number }>;
 }
 
 /** Where a picture sits in its box when it is cropped: zoomed in by `zoom`, moved by `x` and `y` from -1 to 1. */

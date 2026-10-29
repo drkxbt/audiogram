@@ -7,10 +7,10 @@ import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
 import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
 import { colourPanel, COLOUR_LABELS, documentColours, hexToHsv, markPicked, type ColourChoice } from "./colour.js";
 import { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
-import { backgroundOf, defaultLayers, entranceLength, isBackgroundLayer, moveLayer, showCaptions, stacked, widthAnchored, type Layer, type LayerKind } from "./layers.js";
+import { backgroundOf, defaultLayers, entranceLength, isBackgroundLayer, moveLayer, showCaptions, stacked, widthAnchored, type Art, type Layer, type LayerKind } from "./layers.js";
 import { createStage, type FontChoice, type StageLabels } from "./stage.js";
 import { textHeight, textWidth } from "./render.js";
-import { elementTiles, searchTiles, type ElementTile, type SectionId } from "./elements.js";
+import { drawingLayer, elementTiles, matchDrawings, searchTiles, type ElementTile, type SectionId } from "./elements.js";
 import { DEVICES } from "./paint-mockup.js";
 
 export type Tab = "design" | "elements" | "text" | "photos" | "music" | "captions" | "layers";
@@ -114,7 +114,7 @@ export interface Labels {
   grids: string;
   gridNames: { across: string; down: string; three: string; four: string };
   nothingFound: string;
-  sectionNames: Record<SectionId | "recent" | "photos" | "illustrations" | "stickers" | "gifs" | "logos", string>;
+  sectionNames: Record<SectionId | "recent" | "graphics" | "photos" | "illustrations" | "stickers" | "gifs", string>;
   mediaSource: string;
   loadMore: string;
   loadingLibrary: string;
@@ -194,7 +194,7 @@ export interface StockPhoto {
 }
 
 /** The kinds of stock media a source can offer. */
-export type MediaKind = "photo" | "illustration" | "video" | "sticker" | "gif";
+export type MediaKind = "photo" | "illustration" | "vector" | "video" | "sticker" | "gif";
 
 /** One result from a stock source: a preview for the panel and the file to keep, with who made it. */
 export interface MediaItem {
@@ -225,19 +225,29 @@ export interface MediaFeed {
   search(query: string, page: number): Promise<MediaPage>;
 }
 
-/** A brand's logo, drawn in a 24 by 24 box, and its colour. */
-export interface Logo {
+/** A drawing from a bundled set (an icon, an emoji, a brand's logo). Paths painted "currentColor" take the layer's colour; color is the colour it arrives in, such as a brand's. */
+export interface Drawing {
   id: string;
   name: string;
-  hex: string;
-  path: string;
+  art: Art;
+  color?: string;
+  tags?: string[];
 }
 
-/** Free photos a page offers for the picture, stock sources to search, and logos to load when they are first shown. */
+/** A set of drawings read only when it is needed: first() is the handful the Elements overview shows, all() the whole set, featured ones first, for See all and searches. */
+export interface DrawingSet {
+  id: string;
+  name: string;
+  first: () => Promise<Drawing[]>;
+  all: () => Promise<Drawing[]>;
+}
+
+/** Free photos a page offers for the picture, stock sources to search, and sets of drawings, each a section of
+ *  Elements in the order given. */
 export interface Library {
   photos?: StockPhoto[];
   media?: MediaFeed[];
-  logos?: () => Promise<{ featured: string[]; logos: Logo[] }>;
+  drawings?: DrawingSet[];
 }
 
 export interface EditorOptions {
@@ -650,7 +660,7 @@ const DEFAULT_LABELS: Labels = {
   grids: "Photo grids",
   gridNames: { across: "Two across", down: "Two down", three: "Three across", four: "Four" },
   nothingFound: "Nothing matches that. Try a shorter word.",
-  sectionNames: { recent: "Recently used", audio: "Sound and captions", shapes: "Shapes", lines: "Lines", frames: "Photo frames", grids: "Photo grids", photos: "Photos", illustrations: "Illustrations", videos: "Videos", stickers: "Stickers", gifs: "GIFs", logos: "Social logos", charts: "Charts", tables: "Tables", mockups: "Mockups", solids: "3D shapes" },
+  sectionNames: { recent: "Recently used", audio: "Sound and captions", shapes: "Shapes", graphics: "Graphics", lines: "Lines", frames: "Photo frames", grids: "Photo grids", photos: "Photos", illustrations: "Illustrations", videos: "Videos", stickers: "Stickers", gifs: "GIFs", charts: "Charts", tables: "Tables", mockups: "Mockups", solids: "3D shapes" },
   mediaSource: "Source",
   loadMore: "Load more",
   loadingLibrary: "Loading…",
@@ -843,6 +853,30 @@ const shiftCue = (cue: Cue, by: number): Cue => ({
   end: cue.end + by,
   ...(cue.words ? { words: cue.words.map((word) => ({ ...word, start: word.start + by, end: word.end + by })) } : {}),
 });
+
+/** A drawing as an SVG, painted as the canvas paints a graphic layer, "currentColor" in `ink`. Everything is set as
+ *  attributes, since the page's style policy turns away inline styles. */
+function drawingPicture(art: Art, ink: string): SVGSVGElement {
+  const svg = icon("");
+  svg.setAttribute("viewBox", `0 0 ${art.w} ${art.h}`);
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const tint = (paint: string) => (paint === "currentColor" ? ink : paint);
+  for (const part of art.paths) {
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", part.d);
+    // An SVG path is filled black unless told otherwise; a graphic's path is filled only when it has a fill.
+    path.setAttribute("fill", part.fill ? tint(part.fill) : "none");
+    if (part.stroke) {
+      path.setAttribute("stroke", tint(part.stroke));
+      path.setAttribute("stroke-width", String(part.width ?? 1));
+    }
+    if (part.rule) path.setAttribute("fill-rule", part.rule);
+    if (part.opacity !== undefined) path.setAttribute("opacity", String(part.opacity));
+    svg.append(path);
+  }
+  return svg;
+}
 
 export function audiogram(container: HTMLElement, options: EditorOptions = {}): Editor {
   const labels: Labels = { ...DEFAULT_LABELS, ...options.labels };
@@ -1524,7 +1558,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   function selectTab(next: Tab) {
     if (next === "elements" && tab !== next && built) renderElements();
     tab = next;
-    if (next === "elements") loadLogos();
+    if (next === "elements") loadShownDrawings();
     root.dataset.tab = next;
     tabButtons.forEach((button, index) => {
       const on = TABS[index] === next;
@@ -2082,12 +2116,16 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // section whole, and the search looks through every one. What was added lately comes first.
   const allTiles = elementTiles(labels.elementNames);
   let recent: string[] = (options.recent ?? []).filter((tileId) => allTiles.some((tile) => tile.id === tileId)).slice(0, 8);
-  // Stock media from the host's sources, a kind to a section, and logos. What a source shows is fetched once a query
-  // and page, and kept for the visit.
-  type MediaSection = "photos" | "illustrations" | "videos" | "stickers" | "gifs";
-  type PanelView = SectionId | "recent" | MediaSection | "logos";
-  const MEDIA_KIND: Record<MediaSection, MediaKind> = { photos: "photo", illustrations: "illustration", videos: "video", stickers: "sticker", gifs: "gif" };
+  // Stock media from the host's sources, a kind to a section, and the host's sets of drawings, a section each. What a
+  // source shows is fetched once a query and page, and kept for the visit.
+  type MediaSection = "graphics" | "photos" | "illustrations" | "videos" | "stickers" | "gifs";
+  type SetView = `drawings:${string}`;
+  type PanelView = SectionId | "recent" | MediaSection | SetView;
+  const MEDIA_KIND: Record<MediaSection, MediaKind> = { graphics: "vector", photos: "photo", illustrations: "illustration", videos: "video", stickers: "sticker", gifs: "gif" };
   const isMedia = (view: PanelView): view is MediaSection => view in MEDIA_KIND;
+  const isSetView = (view: PanelView): view is SetView => view.startsWith("drawings:");
+  const viewOf = (set: DrawingSet): SetView => `drawings:${set.id}`;
+  const setOf = (view: PanelView) => (library.drawings ?? []).find((set) => viewOf(set) === view);
   let openSection: PanelView | null = null;
   // In a section opened whole: which of its sources shows, and how many pages of it.
   let openFeed = 0;
@@ -2106,29 +2144,50 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     }
     return found;
   }
-  let logoSet: { featured: string[]; logos: Logo[] } | null = null;
-  let logosAsked = false;
-  function loadLogos() {
-    if (logosAsked || !library.logos) return;
-    logosAsked = true;
-    void library.logos().then((set) => (logoSet = set), () => (logoSet = { featured: [], logos: [] })).then(() => {
-      if (tab === "elements") renderElements();
+  // A set's handful and its whole, each asked for once a visit and kept. One that fails is asked again on a later
+  // redraw, but not sooner than RETRY_LOAD, so a dropped connection doesn't send a request with every redraw; until
+  // then the handful that did arrive keeps showing. Kept by the set itself, so a library handed in later brings its own.
+  type SetPart = "first" | "all";
+  type SetLoad = { drawings?: Drawing[]; failedAt?: number };
+  const RETRY_LOAD = 10_000;
+  const drawingLoads = new WeakMap<DrawingSet, Partial<Record<SetPart, SetLoad>>>();
+  function loadDrawings(set: DrawingSet, part: SetPart) {
+    let loads = drawingLoads.get(set);
+    if (!loads) drawingLoads.set(set, (loads = {}));
+    const known = loads[part];
+    if (known && (known.failedAt === undefined || Date.now() - known.failedAt < RETRY_LOAD)) return;
+    const load: SetLoad = {};
+    loads[part] = load;
+    void Promise.resolve().then(() => set[part]()).then((drawings) => {
+      if (!Array.isArray(drawings)) throw new Error("not a list");
+      load.drawings = drawings;
+      // While a search is still being typed, its pause draws the panel; drawing it now would search half a word.
+      if (tab === "elements" && library.drawings?.includes(set) && !searchTimer) renderElements();
+    }).catch(() => {
+      load.failedAt = Date.now();
+      if (tab === "elements" && library.drawings?.includes(set) && !searchTimer) renderElements();
     });
   }
-  const logosMatching = (query: string) => {
-    if (!logoSet) return [];
-    const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-    if (!words.length) {
-      const first = logoSet.featured.map((id) => logoSet!.logos.find((logo) => logo.id === id)).filter((logo): logo is Logo => Boolean(logo));
-      return [...first, ...logoSet.logos.filter((logo) => !logoSet!.featured.includes(logo.id))];
-    }
-    return logoSet.logos.filter((logo) => words.every((word) => logo.name.toLowerCase().split(/[^a-z0-9]+/).some((part) => part.startsWith(word)) || logo.id.startsWith(word)));
-  };
+  /** What one part of a set has given; undefined until it arrives, or when it couldn't be read. */
+  const drawingsIn = (set: DrawingSet, part: SetPart) => drawingLoads.get(set)?.[part]?.drawings;
+  const drawingsFailed = (set: DrawingSet, part: SetPart) => drawingLoads.get(set)?.[part]?.failedAt !== undefined;
+  /** Asks the sets for what Elements shows now, and only while it is open, since a whole set can be a few megabytes:
+   *  each set's handful for the overview, the whole of a set opened with See all, or of every set once a search is
+   *  typed. Once a set's whole is in, its handful is never needed. */
+  function loadShownDrawings() {
+    if (tab !== "elements") return;
+    const query = elementSearch.value.trim();
+    if (openSection) {
+      const set = setOf(openSection);
+      if (set) loadDrawings(set, "all");
+    } else for (const set of library.drawings ?? []) loadDrawings(set, query || drawingsIn(set, "all") ? "all" : "first");
+  }
 
   function renderElements() {
     const query = elementSearch.value.trim();
-    // The logo set is a few megabytes, so it's read when someone first opens Elements, not with the editor.
-    if (tab === "elements") loadLogos();
+    // A set handed in again without the one that was open leaves nothing to show there.
+    if (openSection && isSetView(openSection) && !setOf(openSection)) openSection = null;
+    loadShownDrawings();
     const grid = (tiles: ElementTile[]) => {
       const node = element("div", "ag-el-grid");
       node.append(...tiles.map(elementTile));
@@ -2172,10 +2231,17 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       });
       return line;
     };
-    const logoGrid = (logos: Logo[]) => {
+    const drawingGrid = (set: DrawingSet, drawings: Drawing[]) => {
       const node = element("div", "ag-el-grid");
-      node.append(...logos.map(logoTile));
+      node.append(...drawings.map((drawing) => drawingTile(drawing, set)));
       return node;
+    };
+    /** A set's section: up to eight of its drawings, or a line while they are on their way. */
+    const setBlock = (set: DrawingSet, drawings: Drawing[] | undefined, more: boolean) => {
+      const block = element("section", "ag-el-section");
+      block.dataset.section = viewOf(set);
+      block.append(head(set.name, viewOf(set), more), drawings ? drawingGrid(set, drawings.slice(0, 8)) : help(labels.loadingLibrary));
+      return block;
     };
     /** A section of stock media: the first results of its first source, then the credits. */
     const mediaBlock = (section: MediaSection, extra: HTMLElement[] = []) => {
@@ -2191,12 +2257,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       const found = searchTiles(allTiles, query);
       if (found.length) parts.push(grid(found));
       for (const section of Object.keys(MEDIA_KIND) as MediaSection[]) if (feedsFor(section).length) parts.push(mediaBlock(section));
-      const logos = logosMatching(query);
-      if (logos.length) {
-        const block = element("section", "ag-el-section");
-        block.dataset.section = "logos";
-        block.append(head(labels.sectionNames.logos, "logos", logos.length > 8), logoGrid(logos.slice(0, 8)));
-        parts.push(block);
+      for (const set of library.drawings ?? []) {
+        const all = drawingsIn(set, "all");
+        const matched = all && matchDrawings(all, query);
+        if (!matched && drawingsFailed(set, "all")) continue;
+        if (!matched) parts.push(setBlock(set, undefined, false));
+        else if (matched.length) parts.push(setBlock(set, matched, matched.length > 8));
       }
       if (!parts.length) parts.push(help(labels.nothingFound));
     } else if (openSection) {
@@ -2205,17 +2271,21 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         const was = openSection;
         openSection = null;
         renderElements();
-        elementsBody.querySelector<HTMLElement>(`[data-section="${was}"] .ag-el-all`)?.focus();
+        elementsBody.querySelector<HTMLElement>(`[data-section="${CSS.escape(String(was))}"] .ag-el-all`)?.focus();
       });
       const name = element("h3", "ag-heading");
-      name.textContent = labels.sectionNames[openSection];
+      const openSet = isSetView(openSection) ? setOf(openSection) : undefined;
+      name.textContent = isSetView(openSection) ? openSet?.name ?? "" : labels.sectionNames[openSection];
       parts.push(back, name);
-      if (openSection === "logos") {
-        const logos = logosMatching(query);
-        parts.push(logoGrid(logos.slice(0, openPages * 120)));
-        if (!logoSet) parts.push(help(labels.loadingLibrary));
-        if (logos.length > openPages * 120) parts.push(moreKey());
-      } else {
+      if (openSet) {
+        // The handful already in shows while the rest of the set comes.
+        const all = drawingsIn(openSet, "all");
+        const shown = all ? matchDrawings(all, query) : query ? [] : drawingsIn(openSet, "first") ?? [];
+        if (shown.length) parts.push(drawingGrid(openSet, shown.slice(0, openPages * 120)));
+        if (!all) parts.push(help(drawingsFailed(openSet, "all") ? labels.mediaUnavailable : labels.loadingLibrary));
+        else if (!shown.length) parts.push(help(labels.nothingFound));
+        else if (shown.length > openPages * 120) parts.push(moreKey());
+      } else if (!isSetView(openSection)) {
         const tiles = openSection === "recent" ? recentTiles() : allTiles.filter((tile) => tile.section === openSection);
         const shownTiles = query ? searchTiles(tiles, query) : tiles;
         if (shownTiles.length) parts.push(grid(shownTiles));
@@ -2248,14 +2318,14 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         }
       }
     } else {
-      const order: PanelView[] = [...(recent.length ? ["recent" as const] : []), "audio", "shapes", "lines", "frames", "grids", "photos", "illustrations", "videos", "stickers", "gifs", "logos", "charts", "tables", "mockups", "solids"];
+      const order: Array<Exclude<PanelView, SetView> | DrawingSet> = [...(recent.length ? ["recent" as const] : []), "audio", "shapes", "graphics", "lines", "frames", "grids", "photos", "illustrations", "videos", "stickers", "gifs", ...(library.drawings ?? []), "charts", "tables", "mockups", "solids"];
       for (const section of order) {
-        if (section === "logos") {
-          if (!library.logos) continue;
-          const block = element("section", "ag-el-section");
-          block.dataset.section = "logos";
-          block.append(head(labels.sectionNames.logos, "logos", true), logoSet ? logoGrid(logosMatching("").slice(0, 8)) : help(labels.loadingLibrary));
-          parts.push(block);
+        if (typeof section !== "string") {
+          const all = drawingsIn(section, "all");
+          const shown = all ?? drawingsIn(section, "first");
+          // A set known to be empty, or that couldn't be read, has no section.
+          if ((shown && !shown.length) || (!shown && drawingsFailed(section, "first"))) continue;
+          parts.push(setBlock(section, shown, all ? all.length > 8 : true));
           continue;
         }
         if (section === "videos") {
@@ -2297,7 +2367,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         parts.push(block);
       }
     }
+    const focused = elementsBody.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.drawing : undefined;
     elementsBody.replaceChildren(...parts);
+    if (focused) elementsBody.querySelector<HTMLElement>(`[data-drawing="${CSS.escape(focused)}"]`)?.focus();
   }
 
   /** The key under a section opened whole that shows another page of it. */
@@ -2350,32 +2422,22 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     return button;
   }
 
-  /** A brand's logo, drawn in its colour. */
-  function logoTile(logo: Logo) {
-    const button = element("button", "ag-el ag-el-logo");
+  /** A drawing from a set on a light tile, in its own colour or a dark ink, so brand colours, icons and emoji all read
+   *  in either theme. Pressing it puts it on the picture in its own colour, or in the colour a new shape takes. */
+  function drawingTile(drawing: Drawing, set: DrawingSet) {
+    const button = element("button", "ag-el ag-el-drawing");
     button.type = "button";
-    button.setAttribute("aria-label", labels.addElement(logo.name));
-    button.title = logo.name;
+    // Which set and drawing, so a redraw of the panel can give focus back to it.
+    button.dataset.drawing = `${set.id}/${drawing.id}`;
+    button.setAttribute("aria-label", labels.addElement(drawing.name));
+    button.title = drawing.name;
     const box = element("span", "ag-el-picture");
-    const picture = icon("");
-    picture.setAttribute("viewBox", "0 0 24 24");
-    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    path.setAttribute("d", logo.path);
-    path.setAttribute("fill", logo.hex);
-    picture.append(path);
-    box.append(picture);
+    box.append(drawingPicture(drawing.art, drawing.color ?? "#22211d"));
     const name = element("span", "ag-el-name");
-    name.textContent = logo.name;
+    name.textContent = drawing.name;
     button.append(box, name);
-    button.addEventListener("click", () => addLogo(logo));
+    button.addEventListener("click", () => addLayer(vivid(drawingLayer(drawing, layout, layerId("graphic")))));
     return button;
-  }
-
-  /** A logo on the picture, a sixth of the page across, in its brand's colour. */
-  function addLogo(logo: Logo) {
-    const { width, height } = SIZES[layout];
-    const side = 0.16 * Math.min(width, height);
-    addLayer({ id: layerId("graphic"), kind: "graphic", art: { w: 24, h: 24, paths: [{ d: logo.path, fill: "currentColor" }] }, color: logo.hex, x: 0.5 - side / width / 2, y: 0.5 - side / height / 2, w: side / width, h: side / height, rotation: 0, opacity: 1 });
   }
 
   /** A stock result brought in once and kept with the design, then put on the picture, or into the empty frame
@@ -2406,7 +2468,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     openSection = null;
     // A pause in typing before the sources are asked, so each letter doesn't send a search.
     clearTimeout(searchTimer);
-    searchTimer = window.setTimeout(renderElements, 300);
+    searchTimer = window.setTimeout(() => {
+      searchTimer = 0;
+      renderElements();
+    }, 300);
   });
   let searchTimer = 0;
   const recentTiles = () => recent.map((tileId) => allTiles.find((tile) => tile.id === tileId)).filter((tile): tile is ElementTile => Boolean(tile));
@@ -2421,7 +2486,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (!neutral(theme.accent)) return layer;
     const gold = (paint: string | undefined) => (paint === undefined || paint === "accent" ? "metal:gold" : paint);
     if (layer.kind === "shape" || layer.kind === "chart" || layer.kind === "solid" || layer.kind === "table") return { ...layer, fill: gold(layer.fill) };
-    if (layer.kind === "visual") return { ...layer, color: gold(layer.color) };
+    if (layer.kind === "visual" || layer.kind === "graphic") return { ...layer, color: gold(layer.color) };
     return layer;
   }
 

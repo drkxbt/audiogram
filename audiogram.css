@@ -771,18 +771,19 @@
 @media (prefers-reduced-motion: reduce) {
   .ag-el { transition: none; }
 }
-/* Stock media and logos: the source's own previews, a mark on videos and moving stickers, the credit under each
-   source, and a soft pulse while a pick comes in. */
+/* Stock media and drawings: the source's own previews, cut-outs on a see-through check, a mark on videos and moving
+   stickers, the credit under each source, and a soft pulse while a pick comes in. Drawings sit on a light tile, so
+   dark marks and brand colours read in either theme. */
 .ag-el-stock .ag-el-picture { object-fit: cover; }
-.ag-el-stock[data-kind="sticker"] .ag-el-picture, .ag-el-stock[data-kind="illustration"] .ag-el-picture { object-fit: contain; padding: 6px; background: repeating-conic-gradient(var(--ag-field) 0 25%, var(--ag-surface) 0 50%) 0 0 / 12px 12px; }
+.ag-el-stock:is([data-kind="sticker"], [data-kind="illustration"], [data-kind="vector"]) .ag-el-picture { object-fit: contain; padding: 6px; background: repeating-conic-gradient(var(--ag-field) 0 25%, var(--ag-surface) 0 50%) 0 0 / 12px 12px; }
 .ag-el-stock { position: relative; }
 .ag-el-stock:is([data-kind="video"], [data-kind="gif"])::after { content: ""; position: absolute; top: 10px; right: 10px; width: 0; height: 0; border-style: solid; border-width: 5px 0 5px 8px; border-color: transparent transparent transparent #fff; filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6)); }
 .ag-el[aria-busy="true"] { cursor: progress; }
 .ag-el[aria-busy="true"] .ag-el-picture { animation: ag-el-wait 0.9s ease-in-out infinite alternate; }
 @keyframes ag-el-wait { from { opacity: 1; } to { opacity: 0.45; } }
 .ag-el-grid[aria-busy="true"] { min-height: 72px; border-radius: 8px; background: var(--ag-field); animation: ag-el-wait 0.9s ease-in-out infinite alternate; }
-.ag-el-logo .ag-el-picture { display: grid; place-items: center; background: #f4f3ef; }
-.ag-el-logo .ag-el-picture svg { width: 46%; height: 46%; }
+.ag-el-drawing .ag-el-picture { display: grid; place-items: center; background: #f4f3ef; }
+.ag-el-drawing .ag-el-picture svg { width: 46%; height: 46%; }
 .ag-el-credit { margin: 4px 0 0; color: var(--ag-muted); font-size: 11.5px; }
 .ag-el-credit a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
 .ag-el-credit a:hover { color: var(--ag-text); }

@@ -261,6 +261,16 @@ test("a graphic draws its paths in its own colour, fitted to its box", () => {
   assert.ok(log.calls.some((call) => call.op === "fill" && call.fillStyle === "#123456"), "a fill in its own colour");
 });
 
+test("a graphic's path can be faded on its own, as a part of the layer's opacity, and the next path is not", () => {
+  const art = { w: 24, h: 24, paths: [{ d: "M0 0h24v24z", fill: "#111111", opacity: 0.2 }, { d: "M0 0h4v4z", fill: "#222222" }] };
+  const log = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [{ id: "g", kind: "graphic", art, x: 0.1, y: 0.1, w: 0.2, h: 0.2, rotation: 0, opacity: 0.5 }] })).paint(log.ctx, 0);
+  const faded = log.calls.find((call) => call.op === "fill" && call.fillStyle === "#111111");
+  const next = log.calls.find((call) => call.op === "fill" && call.fillStyle === "#222222");
+  assert.ok(Math.abs(faded.globalAlpha - 0.1) < 1e-9, `${faded.globalAlpha}`);
+  assert.ok(Math.abs(next.globalAlpha - 0.5) < 1e-9, `${next.globalAlpha}`);
+});
+
 test("a frame clips its picture to a shape, and an empty frame shows a placeholder only while editing", () => {
   const picture = { width: 800, height: 400 };
   const framed = { id: "f", kind: "image", image: "a", mask: "ellipse", x: 0.1, y: 0.1, w: 0.4, h: 0.4, rotation: 0, opacity: 1 };

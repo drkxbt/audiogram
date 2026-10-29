@@ -10,8 +10,8 @@ export { clock, FILTERS, fontOf, METALS, metalCss, paintOf, Painter, shownText, 
 export { alignToPage, backgroundOf, defaultLayers, DIRECTED, entranceLength, FRAME_SIZES, isBackgroundLayer, layerAt, motionAt, moveLayer, pageCovers, resizeLayer, resizeTurned, rotateLayer, showCaptions, snapMove, stacked, UNIT_WAYS, widthAnchored, type Adjust, type Ambient, type Art, type Box, type ChartKind, type ClipFrom, type Crop, type Datum, type Device, type Direction, type Entrance, type Guide, type Handle, type Layer, type LayerKind, type Loop, type Motion, type PageEdge, type Paint, type ShapeKind, type Solid, type TextEffect } from "./layers.js";
 export { colourPanel, COLOUR_LABELS, DEFAULT_COLOURS, DEFAULT_GRADIENTS, documentColours, hexToHsv, hsvToHex, markPicked, parseHex, type ColourChoice, type ColourLabels, type ColourPanelOptions } from "./colour.js";
 export { type PaintBox, type PaintEnv } from "./paint-env.js";
-export { elementTiles, searchTiles, SECTIONS, type ElementTile, type SectionId } from "./elements.js";
+export { drawingLayer, elementTiles, matchDrawings, searchTiles, SECTIONS, type ElementTile, type SectionId } from "./elements.js";
 export { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
 export { createStage, type FontChoice, type Stage, type StageHost, type StageLabels } from "./stage.js";
 export { canExportMp4, exportClip, type ExportOptions, type ExportResult } from "./export.js";
-export { audiogram, type Editor, type EditorOptions, type Labels, type Library, type Logo, type MediaFeed, type MediaItem, type MediaKind, type MediaPage, type Settings, type StockPhoto, type Tab, type TemplateChoice } from "./editor.js";
+export { audiogram, type Editor, type EditorOptions, type Labels, type Drawing, type DrawingSet, type Library, type MediaFeed, type MediaItem, type MediaKind, type MediaPage, type Settings, type StockPhoto, type Tab, type TemplateChoice } from "./editor.js";
