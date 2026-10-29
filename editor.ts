@@ -2,7 +2,7 @@ import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, spread, t
 import { exportClip, type ExportResult } from "./export.js";
 import { clipTimeAt, partsLength, readClip, readReel, stitchCues, type Reel } from "./parts.js";
 import { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
-import { Painter, SIZES, THEMES, type Animation, type Layout, type Overlay, type Page, type Scene, type Theme, type Visual } from "./render.js";
+import { Painter, SIZES, THEMES, VISUALS, type Animation, type Layout, type Overlay, type Page, type Scene, type Theme, type Visual } from "./render.js";
 import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
 import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
 import { colourPanel, COLOUR_LABELS, documentColours, hexToHsv, markPicked, type ColourChoice } from "./colour.js";
@@ -12,6 +12,7 @@ import { createStage, type FontChoice, type StageLabels } from "./stage.js";
 import { textHeight, textWidth, wordsSpan } from "./render.js";
 import { drawingLayer, elementTiles, matchDrawings, previewPixels, restyleSound, searchTiles, soundPart, type ElementTile, type SectionId } from "./elements.js";
 import { DEVICES } from "./paint-mockup.js";
+import { cleanSvgFile, SVG_LIMIT, SVG_TYPE } from "./svg.js";
 
 export type Tab = "design" | "elements" | "text" | "photos" | "music" | "captions" | "layers";
 
@@ -114,7 +115,7 @@ export interface Labels {
   grids: string;
   gridNames: { across: string; down: string; three: string; four: string };
   nothingFound: string;
-  sectionNames: Record<SectionId | "recent" | "graphics" | "photos" | "illustrations" | "stickers" | "gifs", string>;
+  sectionNames: Record<SectionId | "recent" | "graphics" | "photos" | "illustrations" | "stickers" | "objects3d" | "gifs", string>;
   mediaSource: string;
   loadMore: string;
   loadingLibrary: string;
@@ -152,7 +153,8 @@ export interface Labels {
   frameRate: string;
   downloadNow: string;
   soundAndCaptions: string;
-  elementNames: { captions: string; bars: string; wave: string; pulse: string; ring: string; time: string; avatar: string; name: string; handle: string; title: string; links: string };
+  /** The clip's own parts, each sound style among them, as Elements and the layers list name them. */
+  elementNames: Record<"captions" | Visual | "time" | "avatar" | "name" | "handle" | "title" | "links", string>;
   addText: string;
   addHeading: string;
   addSubheading: string;
@@ -164,6 +166,7 @@ export interface Labels {
   forgetPicture: string;
   pictureTooBig: string;
   videoTooBig: string;
+  svgTooBig: string;
   layersHelp: string;
   fitPage: string;
   zoomLevel: (percent: number) => string;
@@ -193,8 +196,8 @@ export interface StockPhoto {
   credit?: string;
 }
 
-/** The kinds of stock media a source can offer. */
-export type MediaKind = "photo" | "illustration" | "vector" | "video" | "sticker" | "gif";
+/** The kinds of stock media a source can offer; an object3d is a rendered 3D object on a clear background. */
+export type MediaKind = "photo" | "illustration" | "vector" | "video" | "sticker" | "object3d" | "gif";
 
 /** One result from a stock source: a preview for the panel and the file to keep, with who made it. */
 export interface MediaItem {
@@ -393,8 +396,8 @@ const DEFAULT_LABELS: Labels = {
   exported: (seconds) => `The video is ready: ${formatTime(seconds)} long.`,
   failed: "The video couldn't be made in this browser. Try Chrome, Edge or Safari.",
   openFailed: "This recording couldn't be opened. Save it as an MP3 or WAV and try again.",
-  pictureFailed: "This picture couldn't be opened. Try a JPG, PNG or WebP.",
-  uploadFailed: "That file couldn't be opened. Try a JPG, PNG or WebP picture, or an MP4 or WebM video.",
+  pictureFailed: "This picture couldn't be opened. Try a JPG, PNG, WebP or SVG.",
+  uploadFailed: "That file couldn't be opened. Try a JPG, PNG, WebP or SVG picture, or an MP4 or WebM video.",
   musicFailed: "This track couldn't be opened. Try an MP3 or WAV.",
   timeline: "The recording",
   overview: "The whole recording",
@@ -423,7 +426,7 @@ const DEFAULT_LABELS: Labels = {
   shape: "Shape",
   layouts: { square: "Square", portrait: "Portrait", story: "Story", landscape: "Wide" },
   visual: "Sound style",
-  visuals: { bars: "Bars", wave: "Wave", pulse: "Pulse", ring: "Ring" },
+  visuals: { bars: "Bars", wave: "Wave", pulse: "Pulse", ring: "Ring", radial: "Radial", mirror: "Mirror", line: "Line", dots: "Dots", blocks: "Blocks", scope: "Scope" },
   colours: "Colours",
   theme: (name) => `${name} colours`,
   title: "Title",
@@ -544,7 +547,7 @@ const DEFAULT_LABELS: Labels = {
     paste: "Paste",
     copied: (layer) => `${layer} copied`,
     style: "Style",
-    visualNames: { bars: "Bars", wave: "Wave", pulse: "Pulse", ring: "Ring" },
+    visualNames: { bars: "Bars", wave: "Wave", pulse: "Pulse", ring: "Ring", radial: "Radial", mirror: "Mirror", line: "Line", dots: "Dots", blocks: "Blocks", scope: "Scope" },
     underline: "Underline",
     strike: "Strikethrough",
     list: "List",
@@ -665,7 +668,7 @@ const DEFAULT_LABELS: Labels = {
   grids: "Photo grids",
   gridNames: { across: "Two across", down: "Two down", three: "Three across", four: "Four" },
   nothingFound: "Nothing matches that. Try a shorter word.",
-  sectionNames: { recent: "Recently used", audio: "Sound and captions", shapes: "Shapes", graphics: "Graphics", lines: "Lines", frames: "Photo frames", grids: "Photo grids", photos: "Photos", illustrations: "Illustrations", videos: "Videos", stickers: "Stickers", gifs: "GIFs", mockups: "Mockups", solids: "3D shapes" },
+  sectionNames: { recent: "Recently used", audio: "Sound and captions", shapes: "Shapes", decor: "Decor", graphics: "Graphics", lines: "Lines", frames: "Photo frames", grids: "Photo grids", photos: "Photos", illustrations: "Illustrations", videos: "Videos", stickers: "Stickers", objects3d: "3D", gifs: "GIFs", mockups: "Mockups", solids: "3D shapes" },
   mediaSource: "Source",
   loadMore: "Load more",
   loadingLibrary: "Loading…",
@@ -703,7 +706,7 @@ const DEFAULT_LABELS: Labels = {
   frameRate: "Frames a second",
   downloadNow: "Download",
   soundAndCaptions: "Sound and captions",
-  elementNames: { captions: "Captions", bars: "Sound bars", wave: "Sound wave", pulse: "Pulse", ring: "Sound ring", time: "Clip time", avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", links: "Links" },
+  elementNames: { captions: "Captions", bars: "Sound bars", wave: "Sound wave", pulse: "Pulse", ring: "Sound ring", radial: "Radial bars", mirror: "Mirrored bars", line: "Sound line", dots: "Sound dots", blocks: "Level meter", scope: "Scope", time: "Clip time", avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", links: "Links" },
   addText: "Add text",
   addHeading: "Add a heading",
   addSubheading: "Add a subheading",
@@ -715,6 +718,7 @@ const DEFAULT_LABELS: Labels = {
   forgetPicture: "Remove from your pictures",
   pictureTooBig: "That picture is over 20 MB. Try a smaller one.",
   videoTooBig: "That video is over 200 MB. Try a shorter one.",
+  svgTooBig: "That SVG is over 2 MB. Try a simpler drawing, or save it as a PNG.",
   fitPage: "Fit the page",
   zoomLevel: (percent) => `Zoom ${percent}%`,
   layersHelp: "Top of the picture first. Press a name to select it; hidden parts can be shown again here.",
@@ -727,12 +731,16 @@ const DEFAULT_LABELS: Labels = {
 
 const TABS: Tab[] = ["design", "elements", "text", "photos", "music", "captions", "layers"];
 const TAB_ICONS: Record<Tab, string> = { design: ICONS.design, elements: ICONS.elements, text: ICONS.text, photos: ICONS.photo, music: ICONS.music, captions: ICONS.captions, layers: ICONS.layers };
-// Uploaded pictures: the kinds every browser draws, up to a size a phone can hold several of.
-const PICTURE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif"];
+// Uploaded pictures: the kinds every browser draws, up to a size a phone can hold several of. An SVG stays a drawing,
+// painted at whatever size it is shown, once it has been cleaned (svg.ts).
+const PICTURE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif", SVG_TYPE];
 const PICTURE_LIMIT = 20 * 1024 * 1024;
 // Videos the browser can play in a layer, muted; the clip's sound stays the recording's.
 const VIDEO_TYPES = ["video/mp4", "video/webm", "video/quicktime"];
 const VIDEO_LIMIT = 200 * 1024 * 1024;
+const limitOf = (file: Blob) => (VIDEO_TYPES.includes(file.type) ? VIDEO_LIMIT : file.type === SVG_TYPE ? SVG_LIMIT : PICTURE_LIMIT);
+/** A picture as it may be kept: an SVG cleaned of anything that could run or reach outside it, anything else as it is. */
+const safePicture = (file: Blob): Promise<Blob> => (file.type === SVG_TYPE ? cleanSvgFile(file) : Promise.resolve(file));
 const isVideo = (source: Blob | string) => (typeof source === "string" ? /\.(mp4|webm|mov|m4v)(\?|#|$)/i.test(source) : source.type.startsWith("video/"));
 const LAYOUTS: Layout[] = ["square", "portrait", "story", "landscape"];
 const RATIOS: Record<Layout, string> = { square: "1:1", portrait: "4:5", story: "9:16", landscape: "16:9" };
@@ -1110,7 +1118,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const group = element("div", "ag-tiles");
     group.setAttribute("role", "radiogroup");
     group.setAttribute("aria-labelledby", label.id);
-    group.style.setProperty("--ag-count", String(items.length));
+    // Five at most to a row, so the ten sound styles wrap into two rows rather than squeezing their names.
+    group.style.setProperty("--ag-count", String(Math.min(items.length, 5)));
     const buttons = items.map((item) => {
       const button = element("button", "ag-tile");
       button.type = "button";
@@ -1163,7 +1172,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     renderTemplates();
     changed();
   });
-  tiles(panes.design, labels.visual, (["bars", "wave", "pulse", "ring"] as Visual[]).map((value) => ({ value, text: labels.visuals[value], markup: ICONS[value] })), visual, (value) => {
+  tiles(panes.design, labels.visual, VISUALS.map((value) => ({ value, text: labels.visuals[value], markup: ICONS[value] })), visual, (value) => {
     const was = visual;
     visual = value as Visual;
     // The animation picked here is every sound layer's, the ones added with a look of their own included; one going
@@ -1326,8 +1335,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     return { show, choose: () => input.click() };
   };
   const coverRow = fileRow(panes.photos, labels.cover, "image/*", "round", labels.pictureFailed, async (file) => {
-    cover = file ? await loadImage(file) : null;
-    coverSource = file;
+    const picture = file && (await safePicture(file));
+    cover = picture ? await loadImage(picture) : null;
+    coverSource = picture;
     rebuild();
     changed();
   });
@@ -1339,7 +1349,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (!file) return setLayers(rest, true);
     const video = VIDEO_TYPES.includes(file.type);
     if (!video && !PICTURE_TYPES.includes(file.type)) throw new Error("type");
-    if (file.size > (video ? VIDEO_LIMIT : PICTURE_LIMIT)) throw new Error("size");
+    if (file.size > limitOf(file)) throw new Error("size");
     const key = layerId("picture");
     await keepPicture(file, key, true);
     rowBackground = key;
@@ -1666,7 +1676,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       const { width, height } = SIZES[layout];
       // A canvas of its own, made when first needed: the stage can draw before the editor's measuring one exists.
       spanMeasurer ??= element("canvas", "").getContext("2d")!;
-      return wordsSpan(spanMeasurer, layer, painter.textOf(layer, clipTime()), options.font ?? "Geist, ui-sans-serif, system-ui, sans-serif", width, height);
+      const span = wordsSpan(spanMeasurer, layer, painter.textOf(layer, clipTime()), options.font ?? "Geist, ui-sans-serif, system-ui, sans-serif", width, height);
+      if (!span) return null;
+      // A little room either side, so the outline sits round the words rather than on their first and last letters.
+      const pad = ((layer.size ?? 40) * (Math.min(width, height) / 1080) * 0.3) / width;
+      return { x: span.x - pad, w: span.w + pad * 2 };
     },
     setText(layer, text) {
       if (layer.kind === "title") title = text;
@@ -2199,10 +2213,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   let recent: string[] = (options.recent ?? []).filter((tileId) => allTiles.some((tile) => tile.id === tileId)).slice(0, 8);
   // Stock media from the host's sources, a kind to a section, and the host's sets of drawings, a section each. What a
   // source shows is fetched once a query and page, and kept for the visit.
-  type MediaSection = "graphics" | "photos" | "illustrations" | "videos" | "stickers" | "gifs";
+  type MediaSection = "graphics" | "photos" | "illustrations" | "videos" | "stickers" | "objects3d" | "gifs";
   type SetView = `drawings:${string}`;
   type PanelView = SectionId | "recent" | MediaSection | SetView;
-  const MEDIA_KIND: Record<MediaSection, MediaKind> = { graphics: "vector", photos: "photo", illustrations: "illustration", videos: "video", stickers: "sticker", gifs: "gif" };
+  const MEDIA_KIND: Record<MediaSection, MediaKind> = { graphics: "vector", photos: "photo", illustrations: "illustration", videos: "video", stickers: "sticker", objects3d: "object3d", gifs: "gif" };
   const isMedia = (view: PanelView): view is MediaSection => view in MEDIA_KIND;
   const isSetView = (view: PanelView): view is SetView => view.startsWith("drawings:");
   const viewOf = (set: DrawingSet): SetView => `drawings:${set.id}`;
@@ -2411,7 +2425,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         }
       }
     } else {
-      const order: Array<Exclude<PanelView, SetView> | DrawingSet> = [...(recent.length ? ["recent" as const] : []), "audio", "shapes", "graphics", "lines", "frames", "grids", "photos", "illustrations", "videos", "stickers", "gifs", ...(library.drawings ?? []), "mockups", "solids"];
+      const order: Array<Exclude<PanelView, SetView> | DrawingSet> = [...(recent.length ? ["recent" as const] : []), "audio", "shapes", "decor", "graphics", "lines", "frames", "grids", "photos", "illustrations", "videos", "stickers", "objects3d", "gifs", ...(library.drawings ?? []), "mockups", "solids"];
       for (const section of order) {
         if (typeof section !== "string") {
           const all = drawingsIn(section, "all");
@@ -2546,7 +2560,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         const blob = await response.blob();
         const video = VIDEO_TYPES.includes(blob.type);
         if (!video && !PICTURE_TYPES.includes(blob.type)) throw new Error(blob.type);
-        if (blob.size > (video ? VIDEO_LIMIT : PICTURE_LIMIT)) throw new Error("size");
+        if (blob.size > limitOf(blob)) throw new Error("size");
         await keepPicture(blob, key, false);
       }
       addPicture(key);
@@ -2700,7 +2714,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   async function fillFrame(frameId: string, file: Blob) {
     const video = VIDEO_TYPES.includes(file.type);
     if (!video && !PICTURE_TYPES.includes(file.type)) return tell(labels.uploadFailed);
-    if (file.size > (video ? VIDEO_LIMIT : PICTURE_LIMIT)) return tell(video ? labels.videoTooBig : labels.pictureTooBig);
+    if (file.size > limitOf(file)) return tell(video ? labels.videoTooBig : file.type === SVG_TYPE ? labels.svgTooBig : labels.pictureTooBig);
     const key = layerId("picture");
     try {
       await keepPicture(file, key, true);
@@ -2717,7 +2731,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   /** A dropped picture or video, kept with the uploads and put on the picture on top of the rest. */
   async function uploadAndPlace(file: Blob) {
     const video = VIDEO_TYPES.includes(file.type);
-    if (file.size > (video ? VIDEO_LIMIT : PICTURE_LIMIT)) return tell(video ? labels.videoTooBig : labels.pictureTooBig);
+    if (file.size > limitOf(file)) return tell(video ? labels.videoTooBig : file.type === SVG_TYPE ? labels.svgTooBig : labels.pictureTooBig);
     const key = layerId("picture");
     try {
       await keepPicture(file, key, true);
@@ -2952,6 +2966,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       pictures.set(key, { source, image: null, video, url: video.src.startsWith("blob:") ? video.src : null, listed });
       return;
     }
+    // Pictures kept from an earlier visit come through here too, so an SVG is cleaned however it arrives.
+    if (typeof source !== "string") source = await safePicture(source);
     const image = await loadImage(source);
     const animation = typeof source === "string" ? null : await decodeAnimation(source);
     pictures.set(key, { source, image, video: null, url: image.src.startsWith("blob:") ? image.src : null, listed, animation });
@@ -4175,8 +4191,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         tell(labels.uploadFailed);
         continue;
       }
-      if (file.size > (video ? VIDEO_LIMIT : PICTURE_LIMIT)) {
-        tell(video ? labels.videoTooBig : labels.pictureTooBig);
+      if (file.size > limitOf(file)) {
+        tell(video ? labels.videoTooBig : file.type === SVG_TYPE ? labels.svgTooBig : labels.pictureTooBig);
         continue;
       }
       const key = layerId("picture");
@@ -4233,10 +4249,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (!file) return;
     event.preventDefault();
     const under = (PICTURE_TYPES.includes(file.type) || VIDEO_TYPES.includes(file.type)) ? stage.layerAtClient?.(event.clientX, event.clientY) ?? null : null;
-    if (under?.kind === "avatar" && file.type.startsWith("image/")) void loadImage(file).then((image) => {
-      cover = image;
-      coverSource = file;
-      coverRow.show(file);
+    if (under?.kind === "avatar" && file.type.startsWith("image/")) void safePicture(file).then(async (picture) => {
+      cover = await loadImage(picture);
+      coverSource = picture;
+      coverRow.show(picture);
       rebuild();
       changed();
     }).catch(() => tell(labels.pictureFailed));

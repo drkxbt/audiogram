@@ -1,18 +1,19 @@
-/* What the Elements panel offers, in sections: the clip's own parts, shapes, lines, photo frames and grids, charts,
-   tables, mockups, 3D shapes and moving backgrounds. Each entry knows its name, the words it is found by, and the
+/* What the Elements panel offers, in sections: the clip's own parts, shapes, decor, lines, photo frames and grids,
+   charts, tables, mockups, 3D shapes and moving backgrounds. Each entry knows its name, the words it is found by, and the
    layers it adds, laid out for the frame it goes on. The drawings a host's sets bring are searched and placed here
    too. Free of the DOM, so it can be tested on its own. */
-import { defaultLayers, FRAME_SIZES, type Ambient, type Device, type Layer, type ShapeKind, type Solid } from "./layers.js";
-import type { Layout, Visual } from "./render.js";
+import { defaultLayers, FRAME_SIZES, type Ambient, type Art, type Device, type Layer, type ShapeKind, type Solid } from "./layers.js";
+import { VISUALS, type Layout, type Visual } from "./render.js";
 import type { Drawing } from "./editor.js";
+import { arcsArt, blobArt, confettiArt, dotGridArt, halftoneCircleArt, halftoneFadeArt, pixelCornerArt, pixelFrameArt, raysArt, ringsArt, scallopArt, sparklesArt, squiggleArt, starburstArt, waveArt, zigzagArt } from "./decor.js";
 import { ambientLayer } from "./paint-ambient.js";
 import { mockupLayer } from "./paint-mockup.js";
 import { solidLayer } from "./paint-solid.js";
 
-export type SectionId = "audio" | "shapes" | "lines" | "frames" | "grids" | "videos" | "mockups" | "solids";
+export type SectionId = "audio" | "shapes" | "decor" | "lines" | "frames" | "grids" | "videos" | "mockups" | "solids";
 
 // Charts and tables are no longer offered in Elements (the owner took them out); layers of those kinds still draw.
-export const SECTIONS: SectionId[] = ["audio", "shapes", "lines", "frames", "grids", "videos", "mockups", "solids"];
+export const SECTIONS: SectionId[] = ["audio", "shapes", "decor", "lines", "frames", "grids", "videos", "mockups", "solids"];
 
 export interface ElementTile {
   /** Stable across visits, so Recently used can keep it: the section and the entry, as "shape:star". */
@@ -68,6 +69,34 @@ const SHAPES: Array<[ShapeKind, string, string, number?]> = [
   ["tag", "Tag", "label price"],
   ["cloud", "Cloud", "weather"],
   ["moon", "Moon", "night crescent"],
+];
+
+/** Generated decor: its key, name and search words, how much of the frame's shorter side it spans, and its drawing.
+ *  The first few are the ones the panel shows before See all, so they are one of each kind. */
+const DECOR: Array<[string, string, string, number, () => Art]> = [
+  ["blob-soft", "Soft blob", "organic shape round splodge", 0.4, () => blobArt(8, 7, 0.22)],
+  ["squiggle-long", "Long squiggle", "loops scribble doodle line", 0.6, () => squiggleArt(6, 26)],
+  ["starburst-12", "Starburst, 12 points", "burst star badge sale new", 0.36, () => starburstArt(12, 0.7)],
+  ["halftone-circle", "Halftone circle", "dots pattern retro print disc", 0.4, () => halftoneCircleArt()],
+  ["blob-wobbly", "Wobbly blob", "organic shape splodge lumpy", 0.4, () => blobArt(9, 9, 0.36)],
+  ["blob-pebble", "Pebble", "organic shape blob stone smooth", 0.36, () => blobArt(10, 5, 0.14)],
+  ["squiggle-short", "Short squiggle", "loops scribble doodle line", 0.4, () => squiggleArt(3, 40)],
+  ["wave", "Wavy line", "squiggle wave rule divider", 0.56, () => waveArt(4, 40)],
+  ["zigzag", "Zigzag", "line chevron rule divider", 0.5, () => zigzagArt(6, 40)],
+  ["starburst-8", "Starburst, 8 points", "burst star badge spiky", 0.36, () => starburstArt(8, 0.5)],
+  ["seal-24", "Seal, 24 points", "burst starburst badge sticker sale", 0.36, () => starburstArt(24, 0.84)],
+  ["rays", "Sun rays", "sunburst beams retro", 0.5, () => raysArt(16)],
+  ["sparkles", "Sparkles", "shine twinkle stars glitter", 0.28, () => sparklesArt()],
+  ["flower", "Flower", "daisy scallop badge petals", 0.32, () => scallopArt(8)],
+  ["scallop", "Scalloped badge", "seal sticker scallop round", 0.34, () => scallopArt(24)],
+  ["pixel-frame", "Pixel frame", "8-bit retro border box game", 0.62, () => pixelFrameArt(20, 20, 3)],
+  ["pixel-frame-wide", "Wide pixel frame", "8-bit retro border box game", 0.8, () => pixelFrameArt(25, 14, 3)],
+  ["pixel-corner", "Pixel corner", "8-bit retro bracket border game", 0.24, () => pixelCornerArt(8, 2)],
+  ["halftone-fade", "Halftone fade", "dots pattern retro print gradient", 0.56, () => halftoneFadeArt()],
+  ["dot-grid", "Dot grid", "dots pattern polka", 0.32, () => dotGridArt(8)],
+  ["confetti", "Confetti", "party scatter celebrate bits", 0.5, () => confettiArt(7)],
+  ["rings", "Concentric rings", "circles target ripple orbit", 0.4, () => ringsArt(5, 50)],
+  ["arcs", "Rainbow arcs", "rainbow arches retro sunrise", 0.5, () => arcsArt(4, 70, 40)],
 ];
 
 const LINES: Array<[string, string, string, Partial<Layer>]> = [
@@ -144,32 +173,46 @@ const AMBIENTS: Array<[Ambient, string, string]> = [
   ["grain", "Film grain", "noise texture"],
 ];
 
-/** A sound part where the classic layout puts it; a ring reads best round, so it gets a square of its own there. */
+// The sound styles drawn round a middle, which read best in a square box; the rest are made for a strip.
+const ROUND = new Set<Visual | undefined>(["ring", "radial"]);
+
+// Words a sound style is found by in a search, besides the ones every sound part has.
+const SOUND_TAGS: Partial<Record<Visual, string>> = {
+  radial: "sunburst circle",
+  mirror: "reflection",
+  line: "spectrum curve",
+  dots: "led lights",
+  blocks: "vu peak segments",
+  scope: "oscilloscope",
+};
+
+/** A sound part where the classic layout puts it; a ring or radial bars read best round, so they get a square of their
+ *  own there. */
 export function soundPart(classic: Layer, look: Visual | undefined, layout: Layout): Layer {
-  if (look !== "ring") return classic;
+  if (!ROUND.has(look)) return classic;
   const { width, height } = FRAME_SIZES[layout];
   const side = Math.min(width, height) * 0.32;
   return { ...classic, x: classic.x + classic.w / 2 - side / width / 2, y: classic.y + classic.h / 2 - side / height / 2, w: side / width, h: side / height };
 }
 
 /**
- * A sound layer changed from one look to another. A ring sits in a square and the bars, wave and pulse in a strip, so a
- * change between the two refits the box about its middle; a change within either keeps it.
+ * A sound layer changed from one look to another. A ring and radial bars sit in a square and the other styles in a
+ * strip, so a change from round to a strip refits the box; a change within either keeps it.
  */
 export function restyleSound(layer: Layer, from: Visual, to: Visual): Layer {
-  // A strip keeps its box as a ring, which the painter draws as a row of dots there: growing it into a round ring would
-  // cover the words a template sets around its strip. A ring becomes a strip along its own foot, clear of a clock or
-  // a photo in its middle.
-  if (from !== "ring" || to === "ring") return layer;
+  // A strip keeps its box as a ring or radial bars, which the painter lays out along the strip: growing it into a round
+  // box would cover the words a template sets around its strip. A round one becomes a strip along its own foot, clear
+  // of a clock or a photo in its middle.
+  if (!ROUND.has(from) || ROUND.has(to)) return layer;
   const h = layer.h / 5;
   return { ...layer, y: layer.y + layer.h - h, h };
 }
 
 /** Every entry of the panel, section by section. `parts` names the clip's own parts in the editor's words. */
-export function elementTiles(parts: Record<"captions" | "bars" | "wave" | "pulse" | "ring" | "time" | "avatar" | "name" | "handle" | "title" | "links", string>): ElementTile[] {
+export function elementTiles(parts: Record<"captions" | Visual | "time" | "avatar" | "name" | "handle" | "title" | "links", string>): ElementTile[] {
   const tiles: ElementTile[] = [];
   const sound: Array<[keyof typeof parts, Layer["kind"], Visual?]> = [
-    ["captions", "captions"], ["bars", "visual", "bars"], ["wave", "visual", "wave"], ["pulse", "visual", "pulse"], ["ring", "visual", "ring"], ["time", "time"],
+    ["captions", "captions"], ...VISUALS.map((look): [Visual, Layer["kind"], Visual] => [look, "visual", look]), ["time", "time"],
     ["avatar", "avatar"], ["name", "name"], ["handle", "handle"], ["title", "title"], ["links", "links"],
   ];
   for (const [key, kind, look] of sound) {
@@ -177,7 +220,7 @@ export function elementTiles(parts: Record<"captions" | "bars" | "wave" | "pulse
       id: `audio:${key}`,
       section: "audio",
       name: parts[key],
-      tags: kind === "visual" ? "sound audio waveform equaliser" : kind === "captions" ? "subtitles words transcript" : "",
+      tags: kind === "visual" ? `sound audio waveform equaliser ${SOUND_TAGS[look!] ?? ""}`.trim() : kind === "captions" ? "subtitles words transcript" : "",
       part: { kind, look },
       make: (layout, newId) => {
         const classic = defaultLayers(layout).find((layer) => layer.kind === kind);
@@ -187,6 +230,19 @@ export function elementTiles(parts: Record<"captions" | "bars" | "wave" | "pulse
   }
   for (const [shape, name, tags, radius] of SHAPES) {
     tiles.push({ id: `shape:${shape}${radius ? "-rounded" : ""}`, section: "shapes", name, tags, make: (layout, newId) => [base(newId("shape"), "shape", 0, 0, 0, 0, { ...centred(layout, 0.3, shape === "banner" ? 3 : shape === "tag" ? 1.8 : shape === "quote" ? 1.3 : 1), shape, fill: "accent", radius })] });
+  }
+  for (const [key, name, tags, side, draw] of DECOR) {
+    tiles.push({
+      id: `decor:${key}`,
+      section: "decor",
+      name,
+      tags,
+      make: (layout, newId) => {
+        // Drawn afresh each time, so no two layers ever share one drawing.
+        const art = draw();
+        return [base(newId("graphic"), "graphic", 0, 0, 0, 0, { ...centred(layout, side, art.w / art.h), art, color: "accent" })];
+      },
+    });
   }
   for (const [key, name, tags, style] of LINES) {
     tiles.push({

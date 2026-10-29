@@ -37,12 +37,14 @@
     "templates.ts",
     "colour.ts",
     "elements.ts",
+    "decor.ts",
     "paint-env.ts",
     "paint-chart.ts",
     "paint-table.ts",
     "paint-mockup.ts",
     "paint-solid.ts",
     "paint-ambient.ts",
-    "paint-placeholder.ts"
+    "paint-placeholder.ts",
+    "svg.ts"
   ]
 }

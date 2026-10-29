@@ -10,6 +10,7 @@ export { clock, FILTERS, fontOf, METALS, metalCss, paintOf, Painter, shownText, 
 export { alignToPage, backgroundOf, defaultLayers, DIRECTED, entranceLength, FRAME_SIZES, isBackgroundLayer, layerAt, libraryPhotos, motionAt, moveLayer, pageCovers, PHOTO_KEY, resizeLayer, resizeTurned, rotateLayer, showCaptions, snapMove, stacked, UNIT_WAYS, widthAnchored, type Adjust, type Ambient, type Art, type Box, type ChartKind, type ClipFrom, type Clock, type Crop, type Datum, type Device, type Direction, type Entrance, type Guide, type Handle, type Layer, type LayerKind, type Loop, type Motion, type PageEdge, type Paint, type ShapeKind, type Solid, type TextEffect } from "./layers.js";
 export { colourPanel, COLOUR_LABELS, DEFAULT_COLOURS, DEFAULT_GRADIENTS, documentColours, hexToHsv, hsvToHex, markPicked, parseHex, type ColourChoice, type ColourLabels, type ColourPanelOptions } from "./colour.js";
 export { type PaintBox, type PaintEnv } from "./paint-env.js";
+export { arcsArt, blobArt, confettiArt, dotGridArt, halftoneCircleArt, halftoneFadeArt, pixelCornerArt, pixelFrameArt, raysArt, ringsArt, scallopArt, sparklesArt, squiggleArt, starburstArt, waveArt, zigzagArt } from "./decor.js";
 export { drawingLayer, elementTiles, matchDrawings, searchTiles, SECTIONS, type ElementTile, type SectionId } from "./elements.js";
 export { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
 export { createStage, type FontChoice, type Stage, type StageHost, type StageLabels } from "./stage.js";

@@ -10,7 +10,10 @@ import { paintSolid } from "./paint-solid.js";
 import { paintTable } from "./paint-table.js";
 
 export type Layout = "square" | "portrait" | "story" | "landscape";
-export type Visual = "bars" | "wave" | "pulse" | "ring";
+export type Visual = "bars" | "wave" | "pulse" | "ring" | "radial" | "mirror" | "line" | "dots" | "blocks" | "scope";
+
+/** Every sound style, in the order the editor offers them. */
+export const VISUALS: Visual[] = ["bars", "wave", "pulse", "ring", "radial", "mirror", "line", "dots", "blocks", "scope"];
 
 /** Video sizes: square and 4:5 for feeds, 9:16 for TikTok, Reels and Shorts, 16:9 for YouTube and LinkedIn. */
 export const SIZES: Record<Layout, { width: number; height: number }> = FRAME_SIZES;
@@ -667,6 +670,29 @@ const SINGLE_LINE = new Set(["name", "handle", "links", "time"]);
 // The sound ring: its dots, and how many of the newest lit ones glow as the head of a comet.
 const RING_DOTS = 60;
 const RING_HEAD = 4;
+// How bright an unlit light of the dots and blocks is, so the shape of the meter shows in silence too.
+const UNLIT = 0.14;
+// A blocks column's peak cap waits this long at the top, in seconds, then falls this share of the box a second.
+const CAP_HOLD = 0.35;
+const CAP_FALL = 0.5;
+// The scope's stretch of sound, in seconds: a few periods of a speaking voice. And how far its line swings for a given
+// sample, before it is eased off towards the edge of the box.
+const SCOPE_SPAN = 0.03;
+const SCOPE_GAIN = 3.2;
+
+/** A band's loudness widened for a meter: a voice keeps most bands between a half and nine tenths full, which would
+ *  hold blocks and lights near the top; this lets the quieter bands drop and the loud ones stand out. */
+function widen(level: number): number {
+  return Math.max(0, (level - 0.25) / 0.75) ** 1.4;
+}
+
+/** A smooth line through points, curving through the middle of each pair, so it never strays outside them. */
+function smoothThrough(ctx: CanvasRenderingContext2D, xs: ArrayLike<number>, ys: ArrayLike<number>) {
+  const last = xs.length - 1;
+  ctx.moveTo(xs[0], ys[0]);
+  for (let i = 1; i < last; i++) ctx.quadraticCurveTo(xs[i], ys[i], (xs[i] + xs[i + 1]) / 2, (ys[i] + ys[i + 1]) / 2);
+  ctx.lineTo(xs[last], ys[last]);
+}
 // The point a still frame with no clip of its own shows the ring and the clock at: most of the way through a minute,
 // so a thumbnail, or a design before there is a recording, reads as the design.
 const SAMPLE_LENGTH = 60;
@@ -679,6 +705,8 @@ const SAMPLE_SHARE = 0.7;
 export class Painter {
   // Each sound layer eases on its own, so two of them never share a meter.
   private meters = new Map<string, Smoother>();
+  // The blocks' peak caps, kept with the meter they top, so a reset drops both.
+  private caps = new WeakMap<Smoother, { levels: Float32Array; since: Float32Array; at: number }>();
   /** The layers this painter draws, bottom first. */
   readonly layers: Layer[];
   /** Whether layers come in and leave at their times, as they do while the clip plays and in the export. Off while
@@ -1452,6 +1480,12 @@ export class Painter {
     }
 
     if (visual === "ring") return this.paintRing(ctx, area, time, meter);
+    if (visual === "radial") return this.paintRadial(ctx, area, time, unit, meter);
+    if (visual === "mirror") return this.paintMirror(ctx, area, time, unit, meter);
+    if (visual === "line") return this.paintSpectrumLine(ctx, area, time, unit, meter);
+    if (visual === "dots") return this.paintDots(ctx, area, time, meter);
+    if (visual === "blocks") return this.paintBlocks(ctx, area, time, meter);
+    if (visual === "scope") return this.paintScope(ctx, area, time, unit, meter);
 
     if (visual === "wave") {
       // The last few seconds of loudness, scrolling left, mirrored about the middle.
@@ -1552,6 +1586,275 @@ export class Painter {
       ctx.beginPath();
       ctx.arc(cx + Math.cos(angle) * reach, cy + Math.sin(angle) * reach, dot * grow, 0, Math.PI * 2);
       ctx.fill();
+    }
+    ctx.globalAlpha = alpha;
+  }
+
+  /** How loud each of `count` pitch bands is at `time`, low pitches first, eased by the layer's meter. */
+  private bandsAt(time: number, count: number, meter: Smoother): Float32Array {
+    const { audio } = this.scene;
+    const center = Math.round((audio.start + time) * audio.sampleRate);
+    const size = audio.sampleRate > 30000 ? 2048 : 1024;
+    return meter.next(spectrum(audio.samples, audio.sampleRate, center, { size, bands: count, low: 90, high: 5000 }));
+  }
+
+  /** How much of the clip has played at `time`, from 0 to 1. */
+  private played(time: number): number {
+    const { at, length } = this.progress(time);
+    return length > 0 ? Math.min(1, Math.max(0, at / length)) : 0;
+  }
+
+  /**
+   * Bars standing out from a circle all round, like a sunburst, low pitches at the top and mirrored down both sides; the
+   * circle inside them lights up as far as the clip has played. In a strip the circle opens out into a line along the
+   * middle, the bars standing out from it both ways and the line lit from the left.
+   */
+  private paintRadial(ctx: CanvasRenderingContext2D, area: Box, time: number, unit: number, meter: Smoother) {
+    const alpha = ctx.globalAlpha;
+    const played = this.played(time);
+    ctx.lineCap = "round";
+    if (area.width >= area.height * 2.5) {
+      const count = Math.max(24, Math.min(96, Math.round(area.width / (area.height * 0.14))));
+      const bands = this.bandsAt(time, Math.ceil(count / 2), meter);
+      const step = area.width / count;
+      const thick = step * 0.42;
+      const middle = area.y + area.height / 2;
+      const line = Math.max(unit, thick * 0.4);
+      ctx.globalAlpha = alpha * 0.25;
+      ctx.fillRect(area.x, middle - line / 2, area.width, line);
+      ctx.globalAlpha = alpha;
+      ctx.fillRect(area.x, middle - line / 2, area.width * played, line);
+      ctx.lineWidth = thick;
+      ctx.beginPath();
+      for (let i = 0; i < count; i++) {
+        // Low pitches in the middle, mirrored outwards, as the circle has them at its top.
+        const band = bands[Math.abs(i - (count - 1) / 2) | 0] ?? 0;
+        const reach = (band * (area.height - thick)) / 2;
+        const x = area.x + (i + 0.5) * step;
+        ctx.moveTo(x, middle - reach);
+        ctx.lineTo(x, middle + reach);
+      }
+      ctx.stroke();
+      return;
+    }
+    const count = 72;
+    const outer = Math.min(area.width, area.height) / 2;
+    const inner = outer * 0.5;
+    const thick = ((Math.PI * 2 * inner) / count) * 0.5;
+    // The longest bar, its round end included, just reaches the edge of the box.
+    const room = outer - inner - thick;
+    const cx = area.x + area.width / 2;
+    const cy = area.y + area.height / 2;
+    const bands = this.bandsAt(time, count / 2, meter);
+    const circle = inner - thick * 1.6;
+    ctx.lineWidth = Math.max(unit, thick * 0.45);
+    ctx.globalAlpha = alpha * 0.25;
+    ctx.beginPath();
+    ctx.arc(cx, cy, circle, 0, Math.PI * 2);
+    ctx.stroke();
+    if (played > 0) {
+      ctx.globalAlpha = alpha;
+      ctx.beginPath();
+      ctx.arc(cx, cy, circle, -Math.PI / 2, -Math.PI / 2 + played * Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = alpha;
+    ctx.lineWidth = thick;
+    ctx.beginPath();
+    for (let i = 0; i < count; i++) {
+      const angle = -Math.PI / 2 + (i / count) * Math.PI * 2;
+      const band = bands[Math.min(bands.length - 1, i, count - i)] ?? 0;
+      const from = inner + thick / 2;
+      const to = from + band * room;
+      ctx.moveTo(cx + Math.cos(angle) * from, cy + Math.sin(angle) * from);
+      ctx.lineTo(cx + Math.cos(angle) * to, cy + Math.sin(angle) * to);
+    }
+    ctx.stroke();
+  }
+
+  /** Bars along the pitches, low on the left, standing up from a line across the middle, each with its reflection hanging
+   *  fainter under the line. */
+  private paintMirror(ctx: CanvasRenderingContext2D, area: Box, time: number, unit: number, meter: Smoother) {
+    const alpha = ctx.globalAlpha;
+    const count = Math.max(16, Math.min(48, Math.round(area.width / (area.height * 0.16))));
+    const bands = this.bandsAt(time, count, meter);
+    const step = area.width / count;
+    const width = step * 0.6;
+    const middle = area.y + area.height / 2;
+    const gap = Math.max(unit, area.height * 0.03);
+    const half = (area.height - gap) / 2;
+    for (const [side, shade] of [[-1, 1], [1, 0.42]]) {
+      ctx.globalAlpha = alpha * shade;
+      for (let i = 0; i < count; i++) {
+        const tall = Math.max(Math.min(width, half), widen(bands[i]) * half);
+        const x = area.x + i * step + (step - width) / 2;
+        roundRect(ctx, x, side < 0 ? middle - gap / 2 - tall : middle + gap / 2, width, tall, width / 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = alpha;
+  }
+
+  /** The voice's pitches as one smooth curve, low on the left, over a fill that fades away towards the foot of the box. */
+  private paintSpectrumLine(ctx: CanvasRenderingContext2D, area: Box, time: number, unit: number, meter: Smoother) {
+    const alpha = ctx.globalAlpha;
+    const count = 48;
+    const raw = this.bandsAt(time, count, meter);
+    // Each band eased into its neighbours, so the curve rolls rather than zigzags.
+    const bands = raw.map((value, i) => (raw[Math.max(0, i - 1)] + 2 * value + raw[Math.min(count - 1, i + 1)]) / 4);
+    const thick = Math.max(1, Math.min(Math.min(area.width, area.height) * 0.03, 4 * unit));
+    const left = area.x + thick / 2;
+    const right = area.x + area.width - thick / 2;
+    const top = area.y + thick / 2;
+    const foot = area.y + area.height - thick / 2;
+    const xs = Array.from({ length: count }, (_, i) => left + (i / (count - 1)) * (right - left));
+    const ys = Array.from(bands, (value) => foot - value * (foot - top));
+    ctx.save();
+    ctx.beginPath();
+    smoothThrough(ctx, xs, ys);
+    ctx.lineTo(right, foot);
+    ctx.lineTo(left, foot);
+    ctx.closePath();
+    ctx.clip();
+    // The fade as bands of colour under the curve, as a layer's colour can be a metal's gradient, which takes no
+    // transparency of its own.
+    const peak = Math.min(...ys);
+    const stripes = 24;
+    const span = foot - peak;
+    for (let s = 0; s < stripes; s++) {
+      ctx.globalAlpha = alpha * 0.45 * (1 - s / stripes) ** 1.6;
+      ctx.fillRect(area.x, peak + (span * s) / stripes, area.width, span / stripes);
+    }
+    ctx.restore();
+    ctx.lineWidth = thick;
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    ctx.beginPath();
+    smoothThrough(ctx, xs, ys);
+    ctx.stroke();
+  }
+
+  /** Columns of round lights, low pitches on the left, lit from the bottom up as loud as each pitch is, the unlit ones
+   *  dim behind: an LED equaliser. */
+  private paintDots(ctx: CanvasRenderingContext2D, area: Box, time: number, meter: Smoother) {
+    const alpha = ctx.globalAlpha;
+    // Lights as large as seven fit down the box, within a dozen to 64 across it.
+    const cell = Math.min(area.width / 12, Math.max(area.height / 7, area.width / 64));
+    const cols = Math.max(1, Math.floor(area.width / cell));
+    const rows = Math.max(1, Math.floor(area.height / cell));
+    const bands = this.bandsAt(time, cols, meter);
+    const left = area.x + (area.width - cols * cell) / 2 + cell / 2;
+    const foot = area.y + (area.height + rows * cell) / 2 - cell / 2;
+    const radius = Math.min(cell * 0.34, area.height * 0.45);
+    for (let c = 0; c < cols; c++) {
+      const lit = widen(bands[c]) * rows;
+      for (let r = 0; r < rows; r++) {
+        // The top light fades in as its pitch rises towards it, so a column climbs smoothly rather than in jumps.
+        const on = Math.min(1, Math.max(0, lit - r));
+        ctx.globalAlpha = alpha * (UNLIT + (1 - UNLIT) * on);
+        ctx.beginPath();
+        ctx.arc(left + c * cell, foot - r * cell, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = alpha;
+  }
+
+  /** Meter columns of stacked blocks, low pitches on the left, lit from the bottom up, each topped by a thin cap that
+   *  stays a moment at the loudest it reached and then falls slowly. */
+  private paintBlocks(ctx: CanvasRenderingContext2D, area: Box, time: number, meter: Smoother) {
+    const alpha = ctx.globalAlpha;
+    const cols = Math.max(10, Math.min(32, Math.round(area.width / (area.height * 0.22))));
+    const step = area.width / cols;
+    const width = step * 0.7;
+    const segments = Math.max(4, Math.min(18, Math.round(area.height / (width * 0.5))));
+    const pitch = area.height / segments;
+    const tall = pitch * 0.62;
+    const corner = Math.min(width, tall) * 0.18;
+    const bands = this.bandsAt(time, cols, meter).map(widen);
+    const caps = this.capsFor(meter, bands, time);
+    const foot = area.y + area.height;
+    for (let c = 0; c < cols; c++) {
+      const x = area.x + c * step + (step - width) / 2;
+      const lit = Math.round(bands[c] * segments);
+      for (let s = 0; s < segments; s++) {
+        ctx.globalAlpha = alpha * (s < lit ? 1 : UNLIT);
+        roundRect(ctx, x, foot - (s + 1) * pitch + (pitch - tall) / 2, width, tall, corner);
+        ctx.fill();
+      }
+      // The cap sits in a block's place of its own, just over the lit ones at the least, so it never hides in them.
+      const slot = Math.min(segments - 1, Math.max(lit, Math.round(caps[c] * segments)));
+      const capTall = tall * 0.42;
+      ctx.globalAlpha = alpha;
+      roundRect(ctx, x, foot - (slot + 0.5) * pitch - capTall / 2, width, capTall, Math.min(corner, capTall / 2));
+      ctx.fill();
+    }
+    ctx.globalAlpha = alpha;
+  }
+
+  /** Each band's peak, held for a moment and then falling at its own pace; started afresh after a jump in time. */
+  private capsFor(meter: Smoother, levels: Float32Array, time: number): Float32Array {
+    let held = this.caps.get(meter);
+    if (!held || held.levels.length !== levels.length || time < held.at || time - held.at > 1) {
+      held = { levels: Float32Array.from(levels), since: new Float32Array(levels.length).fill(time), at: time };
+      this.caps.set(meter, held);
+    }
+    const passed = time - held.at;
+    for (let i = 0; i < levels.length; i++) {
+      if (levels[i] >= held.levels[i]) {
+        held.levels[i] = levels[i];
+        held.since[i] = time;
+      } else if (time - held.since[i] > CAP_HOLD) held.levels[i] = Math.max(levels[i], held.levels[i] - CAP_FALL * passed);
+    }
+    held.at = time;
+    return held.levels;
+  }
+
+  /**
+   * The sound itself round the playhead, as an oscilloscope draws it: one smooth line through the samples, tapering to
+   * the middle at both ends, with a faint glow that grows with the voice.
+   */
+  private paintScope(ctx: CanvasRenderingContext2D, area: Box, time: number, unit: number, meter: Smoother) {
+    const { samples, sampleRate, start } = this.scene.audio;
+    const alpha = ctx.globalAlpha;
+    const level = meter.next(Float32Array.of(this.level(time)))[0];
+    const span = Math.max(2, Math.round(sampleRate * SCOPE_SPAN));
+    let from = Math.round((start + time) * sampleRate) - (span >> 1);
+    // Starting at a rising crossing just before the window, as a scope's trigger does, holds a steady note still rather
+    // than letting it slide along.
+    for (let i = from; i > from - (span >> 1); i--) {
+      if (i > 0 && i < samples.length && samples[i - 1] < 0 && samples[i] >= 0) {
+        from = i;
+        break;
+      }
+    }
+    const thick = Math.max(1, Math.min(Math.min(area.width, area.height) * 0.025, 3.5 * unit));
+    const glow = thick * 4;
+    const points = Math.max(24, Math.min(240, Math.round(area.width / 4)));
+    const left = area.x + glow / 2;
+    const across = area.width - glow;
+    const middle = area.y + area.height / 2;
+    const half = (area.height - glow) / 2;
+    const xs = new Float32Array(points);
+    const ys = new Float32Array(points);
+    for (let p = 0; p < points; p++) {
+      // Each point is the mean of its share of the samples, which smooths off hiss finer than the line can show.
+      const a = from + Math.floor((p * span) / points);
+      const b = Math.max(a + 1, from + Math.floor(((p + 1) * span) / points));
+      let sum = 0;
+      for (let i = Math.max(0, a); i < Math.min(samples.length, b); i++) sum += samples[i];
+      const taper = Math.sin((Math.PI * p) / (points - 1)) ** 0.6;
+      xs[p] = left + (p / (points - 1)) * across;
+      ys[p] = middle - Math.tanh((sum / (b - a)) * SCOPE_GAIN) * taper * half;
+    }
+    ctx.lineJoin = "round";
+    ctx.lineCap = "round";
+    for (const [width, shade] of [[glow, 0.08 + 0.14 * level], [thick * 2.2, 0.16 + 0.24 * level], [thick, 1]]) {
+      ctx.globalAlpha = alpha * shade;
+      ctx.lineWidth = width;
+      ctx.beginPath();
+      smoothThrough(ctx, xs, ys);
+      ctx.stroke();
     }
     ctx.globalAlpha = alpha;
   }

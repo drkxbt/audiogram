@@ -6,7 +6,7 @@
 import { formatTime, parseTime } from "./captions.js";
 import { alignToPage, DIRECTED, entranceLength, isBackgroundLayer, layerAt, moveLayer, pageCovers, resizeTurned, rotateLayer, snapMove, type Ambient, type Box, type ChartKind, type Clock, type Device, type Direction, type Entrance, type Guide, type Solid, type Handle, type Layer, type Loop, type PageEdge, type ShapeKind, type TextEffect } from "./layers.js";
 import { colourPanel, COLOUR_LABELS, type ColourLabels } from "./colour.js";
-import { FILTERS, metalCss, paintOf, type Theme, type Visual } from "./render.js";
+import { FILTERS, metalCss, paintOf, VISUALS, type Theme, type Visual } from "./render.js";
 import { element, iconButton, ICONS, keyButton } from "./ui.js";
 
 /** A font the editor offers: its family as the canvas names it, and its files, each loaded only when needed. */
@@ -2179,7 +2179,7 @@ export function createStage(host: StageHost): Stage {
 
   function stylePop(anchor: HTMLElement, layer: Layer) {
     const keys = element("div", "ag-pop-actions");
-    for (const look of ["bars", "wave", "pulse", "ring"] as Visual[]) {
+    for (const look of VISUALS) {
       keys.append(toggleKey(labels.visualNames[look], ICONS[look], (layer.visual ?? "") === look, () => {
         const current = find(layer.id)!;
         update(current, host.soundLook?.(current, look) ?? { visual: look });

@@ -419,15 +419,16 @@
 .ag-overlay:focus-visible { box-shadow: 0 0 0 2px var(--ag-stage), 0 0 0 4px var(--ag-text); border-radius: 6px; }
 .ag-hover, .ag-select { position: absolute; transform-origin: center; pointer-events: none; }
 .ag-hover { box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45), 0 0 0 2px rgb(255 255 255 / 0.75); border-radius: 2px; }
-.ag-select { box-shadow: 0 0 0 1px rgb(0 0 0 / 0.55), 0 0 0 2.5px var(--ag-accent), 0 0 0 3.5px rgb(255 255 255 / 0.9); border-radius: 2px; }
+.ag-select { box-shadow: 0 0 0 1.5px var(--ag-accent), 0 0 0 2.5px rgb(0 0 0 / 0.25); border-radius: 1px; }
+/* Small and light, so a short label stays readable while it is picked; each still takes a press well past its edge. */
 .ag-grip, .ag-turn {
   position: absolute;
-  width: 12px;
-  height: 12px;
-  margin: -6px 0 0 -6px;
+  width: 8px;
+  height: 8px;
+  margin: -4px 0 0 -4px;
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 0 1.5px var(--ag-accent), 0 1px 3px rgb(0 0 0 / 0.35);
+  box-shadow: 0 0 0 1px var(--ag-accent), 0 1px 2px rgb(0 0 0 / 0.3);
   pointer-events: auto;
 }
 .ag-grip-nw { left: 0; top: 0; cursor: nwse-resize; }
@@ -439,15 +440,15 @@
 .ag-grip-sw { left: 0; top: 100%; cursor: nesw-resize; }
 .ag-grip-w { left: 0; top: 50%; cursor: ew-resize; }
 /* Each handle is easier to hit than it looks. */
-.ag-grip::before, .ag-turn::before { content: ""; position: absolute; inset: -8px; border-radius: 50%; }
+.ag-grip::before, .ag-turn::before { content: ""; position: absolute; inset: -10px; border-radius: 50%; }
 /* Pictures pull only from their corners; so does anything too small for side handles. */
 .ag-select[data-keep] :is(.ag-grip-n, .ag-grip-s, .ag-grip-e, .ag-grip-w),
 .ag-select[data-small] :is(.ag-grip-n, .ag-grip-s, .ag-grip-e, .ag-grip-w) { display: none; }
 /* Side handles on words are pills, the way they read as "pull to widen". */
-.ag-select[data-words] .ag-grip-e, .ag-select[data-words] .ag-grip-w { width: 6px; height: 18px; margin: -9px 0 0 -3px; border-radius: 3px; }
+.ag-select[data-words] .ag-grip-e, .ag-select[data-words] .ag-grip-w { width: 4px; height: 12px; margin: -6px 0 0 -2px; border-radius: 2px; }
 .ag-select[data-words] .ag-grip-n, .ag-select[data-words] .ag-grip-s { display: none; }
-.ag-turn { left: 50%; top: -28px; cursor: grab; }
-.ag-turn::after { content: ""; position: absolute; left: 50%; top: 12px; width: 1.5px; height: 14px; translate: -50% 0; background: var(--ag-accent); }
+.ag-turn { left: 50%; top: -22px; cursor: grab; }
+.ag-turn::after { content: ""; position: absolute; left: 50%; top: 8px; width: 1px; height: 14px; translate: -50% 0; background: var(--ag-accent); }
 .ag-guides { position: absolute; inset: 0; pointer-events: none; }
 /* Several layers picked: a thin ring round each, and one box round all of them with no handles to pull. */
 .ag-members { position: absolute; inset: 0; pointer-events: none; }
@@ -775,7 +776,7 @@
    stickers, the credit under each source, and a soft pulse while a pick comes in. Drawings sit on a light tile, so
    dark marks and brand colours read in either theme. */
 .ag-el-stock .ag-el-picture { object-fit: cover; }
-.ag-el-stock:is([data-kind="sticker"], [data-kind="illustration"], [data-kind="vector"]) .ag-el-picture { object-fit: contain; padding: 6px; background: repeating-conic-gradient(var(--ag-field) 0 25%, var(--ag-surface) 0 50%) 0 0 / 12px 12px; }
+.ag-el-stock:is([data-kind="sticker"], [data-kind="object3d"], [data-kind="illustration"], [data-kind="vector"]) .ag-el-picture { object-fit: contain; padding: 6px; background: repeating-conic-gradient(var(--ag-field) 0 25%, var(--ag-surface) 0 50%) 0 0 / 12px 12px; }
 .ag-el-stock { position: relative; }
 .ag-el-stock:is([data-kind="video"], [data-kind="gif"])::after { content: ""; position: absolute; top: 10px; right: 10px; width: 0; height: 0; border-style: solid; border-width: 5px 0 5px 8px; border-color: transparent transparent transparent #fff; filter: drop-shadow(0 1px 2px rgb(0 0 0 / 0.6)); }
 .ag-el[aria-busy="true"] { cursor: progress; }
