@@ -7,10 +7,10 @@ import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
 import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
 import { colourPanel, COLOUR_LABELS, documentColours, hexToHsv, markPicked, type ColourChoice } from "./colour.js";
 import { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
-import { backgroundOf, defaultLayers, entranceLength, isBackgroundLayer, libraryPhotos, moveLayer, PHOTO_KEY, showCaptions, stacked, widthAnchored, type Art, type Layer, type LayerKind } from "./layers.js";
+import { backgroundOf, carryLayers, defaultLayers, entranceLength, isBackgroundLayer, libraryPhotos, moveLayer, PHOTO_KEY, showCaptions, stacked, widthAnchored, type Art, type Layer, type LayerKind } from "./layers.js";
 import { createStage, type FontChoice, type StageLabels } from "./stage.js";
 import { textHeight, textWidth, wordsSpan } from "./render.js";
-import { drawingLayer, elementTiles, matchDrawings, previewPixels, restyleSound, searchTiles, soundPart, type ElementTile, type SectionId } from "./elements.js";
+import { drawingLayer, elementTiles, matchDrawings, previewPixels, restyleAll, restyleSound, searchTiles, soundPart, type ElementTile, type SectionId } from "./elements.js";
 import { DEVICES } from "./paint-mockup.js";
 import { cleanSvgFile, SVG_LIMIT, SVG_TYPE } from "./svg.js";
 
@@ -59,6 +59,8 @@ export interface Labels {
   tabs: Record<Tab, string>;
   shape: string;
   layouts: Record<Layout, string>;
+  /** Said when a shape not yet designed takes the design of the one just left. */
+  designCarried: (to: string, from: string) => string;
   visual: string;
   visuals: Record<Visual, string>;
   colours: string;
@@ -425,6 +427,7 @@ const DEFAULT_LABELS: Labels = {
   tabs: { design: "Design", elements: "Elements", text: "Text", photos: "Photos", music: "Music", captions: "Captions", layers: "Layers" },
   shape: "Shape",
   layouts: { square: "Square", portrait: "Portrait", story: "Story", landscape: "Wide" },
+  designCarried: (to, from) => `${to} starts from your ${from} design. Changes here stay on ${to}.`,
   visual: "Sound style",
   visuals: { bars: "Bars", wave: "Wave", pulse: "Pulse", ring: "Ring", radial: "Radial", mirror: "Mirror", line: "Line", dots: "Dots", blocks: "Blocks", scope: "Scope" },
   colours: "Colours",
@@ -964,6 +967,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // The frame's layers for each shape the user has changed; the classic layout stands for the rest.
   let designs: Partial<Record<Layout, Layer[]>> = Object.fromEntries(LAYOUTS.filter((name) => options.layers?.[name] || options.blank).map((name) => [name, (options.layers?.[name] ?? []).map((layer) => ({ ...layer }))]));
   const layersFor = (shape: Layout) => designs[shape] ?? defaultLayers(shape);
+  // The template each shape's design was started from, by id, so a shape not designed yet can be laid out from it.
+  let madeWith: Partial<Record<Layout, string>> = {};
   // Uploaded pictures by key, as given and as drawn; `listed` ones show in the Photos panel.
   const pictures = new Map<string, { source: Blob | string; image: HTMLImageElement | null; video: HTMLVideoElement | null; url: string | null; listed: boolean; animation?: Animation | null }>();
   let editingLayer: string | null = null;
@@ -1166,7 +1171,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     return group;
   };
   tiles(panes.design, labels.shape, (["square", "portrait", "story", "landscape"] as Layout[]).map((value) => ({ value, text: labels.layouts[value], detail: RATIOS[value], markup: ICONS[value] })), layout, (value) => {
+    const from = layout;
     layout = value as Layout;
+    carryDesign(from);
     rebuild();
     applyZoom(zoom);
     renderTemplates();
@@ -1175,10 +1182,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   tiles(panes.design, labels.visual, VISUALS.map((value) => ({ value, text: labels.visuals[value], markup: ICONS[value] })), visual, (value) => {
     const was = visual;
     visual = value as Visual;
-    // The animation picked here is every sound layer's, the ones added with a look of their own included; one going
-    // between a ring and a strip is refitted to its new look. A default design draws its sound in a strip box, which
-    // holds a ring as large as it is tall, so it is left as it is.
-    designs = Object.fromEntries(Object.entries(designs).map(([shape, list]) => [shape, list!.map((layer) => (layer.kind === "visual" ? { ...restyleSound(layer, layer.visual ?? was, visual), visual: undefined } : layer))])) as typeof designs;
+    // One going between a ring and a strip is refitted to its new look. A default design draws its sound in a strip
+    // box, which holds a ring as large as it is tall, so it is left as it is.
+    designs = Object.fromEntries(Object.entries(designs).map(([shape, list]) => [shape, restyleAll(list!, was, visual)])) as typeof designs;
     rebuild();
     record();
     changed();
@@ -1881,7 +1887,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // Each change ended by the user is a step to undo: the layers of every shape and the frame's own words.
   const history: string[] = [];
   let historyAt = -1;
-  const snapshot = () => JSON.stringify({ designs, title, speaker, handle, page, theme: THEMES.includes(theme) ? THEMES.indexOf(theme) : theme });
+  const snapshot = () => JSON.stringify({ designs, madeWith, title, speaker, handle, page, theme: THEMES.includes(theme) ? THEMES.indexOf(theme) : theme });
   function record() {
     const now = snapshot();
     if (history[historyAt] === now) return;
@@ -2028,8 +2034,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const to = historyAt + step;
     if (to < 0 || to >= history.length) return;
     historyAt = to;
-    const state = JSON.parse(history[to]) as { designs: typeof designs; title: string; speaker: string; handle: string; page: Page | null; theme: number | Theme };
+    const state = JSON.parse(history[to]) as { designs: typeof designs; madeWith?: typeof madeWith; title: string; speaker: string; handle: string; page: Page | null; theme: number | Theme };
     ({ designs, title, speaker, handle, page } = state);
+    madeWith = state.madeWith ?? {};
     theme = typeof state.theme === "number" ? THEMES[state.theme] ?? theme : state.theme;
     markTheme();
     renderPageSwatches();
@@ -2159,8 +2166,32 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     markTheme();
     renderPageSwatches();
     stage.select(null);
+    madeWith = { ...madeWith, [layout]: `host:${choice.id}` };
     setLayers(made.layers.map((layer) => ({ ...layer })), true);
     void loadUsedFonts().then(refit);
+    bringPhotos();
+  }
+
+  /** The layers the template with id `made` lays out on `shape`; none when it is no longer offered. */
+  function remake(made: string, shape: Layout): Layer[] {
+    if (!made.startsWith("host:")) return templateOf(made as TemplateId, shape).layers;
+    return hostTemplates.find((choice) => `host:${choice.id}` === made)?.make(shape).layers ?? [];
+  }
+
+  /**
+   * A shape not designed yet, with nothing on it but captions, takes the design on the shape just left, laid out for
+   * its own frame, so changing shape never seems to throw the design away. From then on each shape keeps its own.
+   */
+  function carryDesign(from: Layout) {
+    const bare = (list: Layer[]) => list.every((layer) => layer.kind === "captions");
+    const source = layersFor(from);
+    if (from === layout || !bare(layersFor(layout)) || bare(source)) return;
+    const made = madeWith[from];
+    designs = { ...designs, [layout]: stacked(carryLayers(source, from, layout, made ? remake(made, layout) : [])).map(fitted) };
+    if (made) madeWith = { ...madeWith, [layout]: made };
+    stage.select(null);
+    record();
+    tell(labels.designCarried(labels.layouts[layout], labels.layouts[from]));
     bringPhotos();
   }
 
@@ -2887,6 +2918,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     markTheme();
     renderPageSwatches();
     stage.select(null);
+    madeWith = { ...madeWith, [layout]: id };
     setLayers(chosen.layers, true);
   }
 
@@ -4053,6 +4085,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     cancelAnimationFrame(rehearsalFrame);
     rehearsal = null;
     designs = options.blank ? Object.fromEntries(LAYOUTS.map((shape) => [shape, []])) : {};
+    madeWith = {};
     page = options.blank ? { color: "#ffffff" } : null;
     theme = THEMES[options.blank ? 1 : 0];
     title = speaker = handle = "";

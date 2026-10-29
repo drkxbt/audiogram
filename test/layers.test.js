@@ -198,3 +198,31 @@ test("a way out runs before the clip ends when the layer shows to the end", () =
   assert.equal(motionAt(layer, 2, true, 10).alpha, 1);
   assert.ok(motionAt(layer, 9.9, true, 10).alpha < 0.5, "fading out as the clip ends");
 });
+
+test("a design carried to another shape keeps each layer's pixel size and place, and a background still fills the frame", async () => {
+  const { carryLayers } = await import("../dist/layers.js");
+  const sticker = { id: "image-a", kind: "image", x: 0.4, y: 0.6, w: 0.2, h: 0.2, rotation: 5, opacity: 1 };
+  const back = { id: "image-b", kind: "image", x: 0, y: 0, w: 1, h: 1, rotation: 0, opacity: 1, backdrop: true };
+  const [moved, backdrop] = carryLayers([sticker, back], "square", "story");
+  near(moved.w * 1080, 216);
+  near(moved.h * 1920, 216);
+  near(moved.x + moved.w / 2, 0.5);
+  near(moved.y + moved.h / 2, 0.7);
+  assert.equal(moved.rotation, 5);
+  assert.deepEqual(backdrop, back);
+  const words = { id: "text-a", kind: "text", x: 0.1, y: 0.4, w: 0.8, h: 0.1, rotation: 0, opacity: 1, size: 80 };
+  const [narrower] = carryLayers([words], "landscape", "square");
+  near(narrower.w, 0.8 * 0.5625 * 1920 / 1080);
+  assert.equal(narrower.size, 45, "words shrink with their box when the new shape is narrower");
+});
+
+test("a template's layers carried to another shape go where the template puts them there, keeping what was changed", async () => {
+  const { carryLayers } = await import("../dist/layers.js");
+  const title = { id: "title-main", kind: "title", x: 0.1, y: 0.1, w: 0.8, h: 0.1, rotation: 0, opacity: 1, size: 60, color: "#ff0000" };
+  const added = { id: "image-a", kind: "image", x: 0.4, y: 0.4, w: 0.2, h: 0.2, rotation: 0, opacity: 1 };
+  const storyTitle = { id: "title-main", kind: "title", x: 0.05, y: 0.2, w: 0.9, h: 0.05, rotation: 0, opacity: 1, size: 72, color: "text" };
+  const removed = { id: "shape-gone", kind: "shape", x: 0, y: 0, w: 0.5, h: 0.5, rotation: 0, opacity: 1 };
+  const carried = carryLayers([title, added], "square", "story", [storyTitle, removed]);
+  assert.deepEqual(carried.map((layer) => layer.id), ["title-main", "image-a"], "what was taken off stays off, in the same order");
+  assert.deepEqual({ ...carried[0] }, { ...title, x: 0.05, y: 0.2, w: 0.9, h: 0.05, size: 72 }, "the template's place and size, the colour picked kept");
+});

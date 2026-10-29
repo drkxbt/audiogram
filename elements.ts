@@ -208,6 +208,12 @@ export function restyleSound(layer: Layer, from: Visual, to: Visual): Layer {
   return { ...layer, y: layer.y + layer.h - h, h };
 }
 
+/** A design's layers after its sound style goes from `from` to `to`: each sound layer takes the new look, the ones
+ *  added with a look of their own included, unless it is kept to its own. */
+export function restyleAll(layers: Layer[], from: Visual, to: Visual): Layer[] {
+  return layers.map((layer) => (layer.kind === "visual" && !layer.keepLook ? { ...restyleSound(layer, layer.visual ?? from, to), visual: undefined } : layer));
+}
+
 /** Every entry of the panel, section by section. `parts` names the clip's own parts in the editor's words. */
 export function elementTiles(parts: Record<"captions" | Visual | "time" | "avatar" | "name" | "handle" | "title" | "links", string>): ElementTile[] {
   const tiles: ElementTile[] = [];

@@ -187,3 +187,14 @@ test("radial bars get a square of their own as the ring does, and go between rou
   const flat = restyleSound(round, "radial", "scope");
   assert.ok(Math.abs(flat.h - 0.06) < 1e-9 && Math.abs(flat.y + flat.h - 0.6) < 1e-9, "radial to a strip lies along its foot");
 });
+
+test("the design's sound style restyles every sound layer but one kept to its own look", async () => {
+  const { restyleAll } = await import("../dist/elements.js");
+  const bars = { id: "visual-main", kind: "visual", x: 0.1, y: 0.8, w: 0.8, h: 0.1, rotation: 0, opacity: 1, visual: "bars" };
+  const ring = { id: "visual-ring", kind: "visual", x: 0.1, y: 0.1, w: 0.3, h: 0.3, rotation: 0, opacity: 1, visual: "ring", keepLook: true };
+  const words = { id: "text-a", kind: "text", x: 0, y: 0, w: 1, h: 0.1, rotation: 0, opacity: 1 };
+  const [nextBars, nextRing, nextWords] = restyleAll([bars, ring, words], "bars", "wave");
+  assert.equal(nextBars.visual, undefined, "the main sound follows the design's look");
+  assert.equal(nextRing, ring, "a ring drawn round a clock stays a ring, in its own box");
+  assert.equal(nextWords, words);
+});

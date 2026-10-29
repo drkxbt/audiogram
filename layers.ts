@@ -115,6 +115,8 @@ export interface Layer {
   fill?: Paint;
   /** A sound layer's own look; the scene's when left out. */
   visual?: Visual;
+  /** A sound layer kept to its own look when the design's sound style changes, as a ring drawn round a clock is. */
+  keepLook?: boolean;
   /** Pictures and videos: mirrored across, or upside down. */
   flipX?: boolean;
   flipY?: boolean;
@@ -236,6 +238,27 @@ export const FRAME_SIZES: Record<Layout, { width: number; height: number }> = {
   story: { width: 1080, height: 1920 },
   landscape: { width: 1920, height: 1080 },
 };
+
+/**
+ * A design moved to another shape. A layer `template` makes on the new shape goes where the template puts it there,
+ * keeping everything else that was changed on it. The rest keep their size in pixels and their middle as a share of
+ * the frame, all shrunk alike when the new shape is narrower or shorter. A layer that covers the frame still does.
+ */
+export function carryLayers(layers: Layer[], from: Layout, to: Layout, template: Layer[] = []): Layer[] {
+  const was = FRAME_SIZES[from];
+  const now = FRAME_SIZES[to];
+  const scale = Math.min(1, now.width / was.width, now.height / was.height);
+  const placed = new Map(template.map((layer) => [layer.id, layer]));
+  return layers.map((layer) => {
+    const made = placed.get(layer.id);
+    if (made) return { ...layer, x: made.x, y: made.y, w: made.w, h: made.h, rotation: made.rotation, ...(made.size !== undefined ? { size: made.size } : {}) };
+    if (layer.backdrop || (layer.x <= 0 && layer.y <= 0 && layer.x + layer.w >= 1 && layer.y + layer.h >= 1)) return { ...layer };
+    const w = (layer.w * was.width * scale) / now.width;
+    const h = (layer.h * was.height * scale) / now.height;
+    const size = layer.size !== undefined && scale < 1 ? { size: Math.round(layer.size * scale) } : {};
+    return { ...layer, x: layer.x + layer.w / 2 - w / 2, y: layer.y + layer.h / 2 - h / 2, w, h, ...size };
+  });
+}
 
 /** The classic layout, as layers: a name card at the top, the visual, the captions, and the links along the bottom. */
 export function defaultLayers(layout: Layout): Layer[] {
