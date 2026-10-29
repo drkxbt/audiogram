@@ -159,3 +159,42 @@ test("a layer lines up with the page's edges and middle, by the box it takes up 
   const turned = alignToPage({ ...layer, rotation: 90 }, "left", 1000, 1000);
   near(turned.x + turned.w / 2, 0.05);
 });
+
+test("more ways in: a wipe uncovers, a blur clears, a tumble turns, each settling where the layer ends up", () => {
+  const at = (enter, time) => motionAt(timed({ enter, from: 1 }), time, true);
+  assert.ok(at("wipe", 1.1).clip < 1);
+  assert.equal(at("wipe", 4).clip, 1);
+  assert.ok(at("blur", 1.1).blur > 0);
+  assert.equal(at("blur", 4).blur, 0);
+  assert.ok(Math.abs(at("tumble", 1.1).rotate) > 0);
+  assert.equal(at("tumble", 4).rotate, 0);
+  assert.ok(at("bounce", 1.1).dy !== 0);
+  near(at("bounce", 4).dy, 0);
+  assert.ok(at("stomp", 1.05).scale > 1);
+  near(at("stomp", 4).scale, 1);
+});
+
+test("a way out runs before the layer's end, and a speed shortens or lengthens both", () => {
+  const layer = timed({ exit: "fade", from: 0, until: 5 });
+  assert.equal(motionAt(layer, 2, true).alpha, 1);
+  assert.ok(motionAt(layer, 4.9, true).alpha < 0.5, "fading out just before its end");
+  const quick = timed({ enter: "fade", from: 0, speed: 2 });
+  const slow = timed({ enter: "fade", from: 0 });
+  assert.equal(motionAt(quick, 0.35, true).alpha, 1, "twice as fast: settled by 0.3 s");
+  assert.ok(motionAt(slow, 0.35, true).alpha < 1);
+});
+
+test("a loop keeps a layer moving for as long as it shows, and stops while it is edited", () => {
+  const layer = timed({ loop: "pulse" });
+  const sizes = [0.1, 0.4, 0.7, 1.0].map((time) => motionAt(layer, time, true).scale);
+  assert.ok(Math.max(...sizes) - Math.min(...sizes) > 0.01, `${sizes}`);
+  assert.equal(motionAt(layer, 0.4, false).scale, 1);
+  const wiggle = [0.1, 0.25].map((time) => motionAt(timed({ loop: "wiggle" }), time, true).rotate);
+  assert.notEqual(wiggle[0], wiggle[1]);
+});
+
+test("a way out runs before the clip ends when the layer shows to the end", () => {
+  const layer = timed({ exit: "fade" });
+  assert.equal(motionAt(layer, 2, true, 10).alpha, 1);
+  assert.ok(motionAt(layer, 9.9, true, 10).alpha < 0.5, "fading out as the clip ends");
+});

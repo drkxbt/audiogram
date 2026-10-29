@@ -6,9 +6,9 @@ export { clipTimeAt, joinParts, partsLength, readClip, recordingTimeAt, stitch, 
 export { OUTLINE_RATE, openSource, type AudioSource, type SourceOptions } from "./source.js";
 export { frameSpan, indexMp3, parseWav, wavHeader, type FrameSpan, type Mp3Index, type WavInfo } from "./mp3.js";
 export { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
-export { clock, fontOf, paintOf, Painter, SIZES, textHeight, THEMES, wrap, type Layout, type Overlay, type OverlayFrame, type Page, type Scene, type Theme, type Visual } from "./render.js";
-export { alignToPage, defaultLayers, FRAME_SIZES, layerAt, motionAt, moveLayer, resizeLayer, resizeTurned, rotateLayer, snapMove, type Adjust, type Box, type Entrance, type Guide, type Handle, type Layer, type LayerKind, type Motion, type PageEdge, type Paint, type ShapeKind } from "./layers.js";
+export { clock, FILTERS, fontOf, paintOf, Painter, shownText, SIZES, textHeight, THEMES, wrap, type Layout, type Overlay, type OverlayFrame, type Page, type Scene, type Theme, type Visual } from "./render.js";
+export { alignToPage, defaultLayers, FRAME_SIZES, layerAt, motionAt, moveLayer, resizeLayer, resizeTurned, rotateLayer, snapMove, type Adjust, type Art, type Box, type Crop, type Entrance, type Guide, type Handle, type Layer, type LayerKind, type Loop, type Motion, type PageEdge, type Paint, type ShapeKind, type TextEffect } from "./layers.js";
 export { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
 export { createStage, type FontChoice, type Stage, type StageHost, type StageLabels } from "./stage.js";
 export { canExportMp4, exportClip, type ExportOptions, type ExportResult } from "./export.js";
-export { audiogram, type Editor, type EditorOptions, type Labels, type Settings, type Tab } from "./editor.js";
+export { audiogram, type Editor, type EditorOptions, type Labels, type Library, type LibraryItem, type Settings, type StockPhoto, type Tab, type TemplateChoice } from "./editor.js";

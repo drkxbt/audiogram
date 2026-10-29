@@ -14,23 +14,27 @@ export interface ExportOptions {
    * that frame first; `live` when the clip is played in real time to be recorded, and it should just play along.
    */
   prepare?: (time: number, live: boolean) => Promise<void> | void;
+  /** The video's size as a share of the shape's full size: 2/3 makes 720p of a 1080p shape. */
+  scale?: number;
 }
 
 export interface ExportResult {
   blob: Blob;
   type: string;
-  extension: "mp4" | "webm";
+  extension: "mp4" | "webm" | "png";
 }
 
 const VIDEO_CODECS = ["avc1.42E028", "avc1.4D4028", "avc1.640028"];
+// Level 4.2 for more than 30 frames a second at these sizes; 4.0 tops out at about 30.
+const FAST_CODECS = ["avc1.42E02A", "avc1.4D402A", "avc1.64002A"];
 
 /** Whether this browser can make an MP4 without playing the clip in real time: H.264 and AAC through WebCodecs. */
-export async function canExportMp4(width = 1080, height = 1080, sampleRate = 48000): Promise<{ video: string; audio: string } | null> {
+export async function canExportMp4(width = 1080, height = 1080, sampleRate = 48000, fps = 30): Promise<{ video: string; audio: string } | null> {
   if (typeof VideoEncoder === "undefined" || typeof AudioEncoder === "undefined") return null;
   let video: string | null = null;
-  for (const codec of VIDEO_CODECS) {
+  for (const codec of fps > 30 ? FAST_CODECS : VIDEO_CODECS) {
     try {
-      const { supported } = await VideoEncoder.isConfigSupported({ codec, width, height, bitrate: 4_000_000, framerate: 30, avc: { format: "avc" } });
+      const { supported } = await VideoEncoder.isConfigSupported({ codec, width, height, bitrate: 4_000_000, framerate: fps, avc: { format: "avc" } });
       if (supported) {
         video = codec;
         break;
@@ -50,8 +54,13 @@ export async function canExportMp4(width = 1080, height = 1080, sampleRate = 480
 
 /** Renders the clip and returns it as a video file: an MP4 where the browser can encode one, a WebM otherwise. */
 export async function exportClip(scene: Scene, options: ExportOptions = {}): Promise<ExportResult> {
-  const { width, height } = SIZES[scene.layout];
-  const codecs = await canExportMp4(width, height, scene.audio.sampleRate);
+  const full = SIZES[scene.layout];
+  const scale = Math.min(1, Math.max(0.25, options.scale ?? 1));
+  // H.264 takes even sizes only.
+  const width = Math.round((full.width * scale) / 2) * 2;
+  const height = Math.round((full.height * scale) / 2) * 2;
+  if (scale < 1 && !options.videoBitrate) options = { ...options, videoBitrate: Math.max(2_000_000, Math.round(5_000_000 * scale * scale)) };
+  const codecs = await canExportMp4(width, height, scene.audio.sampleRate, options.fps ?? 30);
   if (codecs) return encodeMp4(scene, codecs, width, height, options);
   return recordRealtime(scene, width, height, options);
 }

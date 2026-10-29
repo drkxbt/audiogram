@@ -3,6 +3,13 @@ import assert from "node:assert/strict";
 import { Painter, textHeight, THEMES } from "../dist/render.js";
 import { defaultLayers } from "../dist/layers.js";
 
+// Paths as the canvas takes them, so graphics can be drawn outside a browser.
+globalThis.Path2D ??= class Path2D {
+  constructor(d) {
+    this.d = d;
+  }
+};
+
 // A 2D context that keeps every call, with the drawing state at the moment of each fillText and drawImage.
 function canvasLog(width, height) {
   const calls = [];
@@ -194,4 +201,150 @@ test("capitals are measured as they are drawn, so a box sized for them holds eve
   const lower = textHeight(ctx, layer, words, "Geist", 1080, 1080);
   const upper = textHeight(ctx, { ...layer, uppercase: true }, words, "Geist", 1080, 1080);
   assert.ok(upper > lower, `${upper} > ${lower}`);
+});
+
+const words = (extra) => ({ id: "w", kind: "text", text: "Hello", x: 0.1, y: 0.1, w: 0.8, h: 0.2, rotation: 0, opacity: 1, size: 60, color: "#222222", ...extra });
+
+test("words can be underlined, struck through and spaced out", () => {
+  const plain = canvasLog(1080, 1080);
+  new Painter(scene({ layers: [words({})] })).paint(plain.ctx, 0);
+  const marked = canvasLog(1080, 1080);
+  new Painter(scene({ layers: [words({ underline: true, strike: true, letterSpacing: 100 })] })).paint(marked.ctx, 0);
+  const rules = (calls) => calls.filter((call) => call.op === "fillRect").length;
+  assert.equal(rules(marked.calls) - rules(plain.calls), 2, "a rule under the words and one through them");
+  const text = marked.calls.find((call) => call.op === "fillText" && call.text === "Hello");
+  assert.equal(text.letterSpacing, "6px", "a tenth of an em at 60 px");
+});
+
+test("hollow words are outlined only, and splice adds a shifted copy behind them", () => {
+  const hollow = canvasLog(1080, 1080);
+  new Painter(scene({ layers: [words({ effect: "hollow" })] })).paint(hollow.ctx, 0);
+  assert.ok(hollow.calls.some((call) => call.op === "strokeText"));
+  assert.ok(!hollow.calls.some((call) => call.op === "fillText" && call.text === "Hello"));
+  const splice = canvasLog(1080, 1080);
+  new Painter(scene({ layers: [words({ effect: "splice", effectColor: "#ff00aa" })] })).paint(splice.ctx, 0);
+  assert.ok(splice.calls.some((call) => call.op === "fillText" && call.fillStyle === "#ff00aa"));
+  for (const effect of ["lift", "echo", "glitch", "neon"]) {
+    const log = canvasLog(1080, 1080);
+    new Painter(scene({ layers: [words({ effect })] })).paint(log.ctx, 0);
+    assert.ok(log.calls.filter((call) => call.op === "fillText" && call.text === "Hello").length >= 1, effect);
+  }
+});
+
+test("a list puts a bullet or a number before each line typed, and line height spreads the lines", () => {
+  const log = canvasLog(1080, 1080);
+  new Painter(scene({ layers: [words({ text: "One\nTwo", list: "bullet" })] })).paint(log.ctx, 0);
+  assert.ok(log.calls.some((call) => call.op === "fillText" && call.text === "• One"));
+  const numbered = canvasLog(1080, 1080);
+  new Painter(scene({ layers: [words({ text: "One\nTwo", list: "number" })] })).paint(numbered.ctx, 0);
+  assert.ok(numbered.calls.some((call) => call.op === "fillText" && call.text === "2. Two"));
+  const ctx = { font: "", measureText: (text) => ({ width: text.length * 20 }) };
+  const base = textHeight(ctx, words({ text: "One\nTwo" }), "One\nTwo", "Geist", 1080, 1080);
+  const spread = textHeight(ctx, words({ text: "One\nTwo", lineHeight: 2.3 }), "One\nTwo", "Geist", 1080, 1080);
+  assert.ok(Math.abs(spread / base - 2) < 0.01, `${spread / base}`);
+});
+
+test("curved words are set a letter at a time along an arc", () => {
+  const log = canvasLog(1080, 1080);
+  new Painter(scene({ layers: [words({ text: "Curve", curve: 60 })] })).paint(log.ctx, 0);
+  const letters = log.calls.filter((call) => call.op === "fillText").map((call) => call.text);
+  assert.deepEqual(letters, ["C", "u", "r", "v", "e"]);
+  assert.ok(log.calls.filter((call) => call.op === "rotate").length >= 5);
+});
+
+test("a graphic draws its paths in its own colour, fitted to its box", () => {
+  const art = { w: 24, h: 24, paths: [{ d: "M2 2L22 22", stroke: "currentColor", width: 2 }, { d: "M0 0h4v4z", fill: "#123456" }] };
+  const log = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [{ id: "g", kind: "graphic", art, color: "#ff0000", x: 0.1, y: 0.1, w: 0.2, h: 0.2, rotation: 0, opacity: 1 }] })).paint(log.ctx, 0);
+  assert.ok(log.calls.some((call) => call.op === "stroke" && call.strokeStyle === "#ff0000"), "a stroke in the layer's colour");
+  assert.ok(log.calls.some((call) => call.op === "fill" && call.fillStyle === "#123456"), "a fill in its own colour");
+});
+
+test("a frame clips its picture to a shape, and an empty frame shows a placeholder only while editing", () => {
+  const picture = { width: 800, height: 400 };
+  const framed = { id: "f", kind: "image", image: "a", mask: "ellipse", x: 0.1, y: 0.1, w: 0.4, h: 0.4, rotation: 0, opacity: 1 };
+  const log = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [framed], images: new Map([["a", picture]]) })).paint(log.ctx, 0);
+  const clip = log.calls.findIndex((call) => call.op === "clip");
+  const ellipse = log.calls.findIndex((call) => call.op === "ellipse");
+  const draw = log.calls.findIndex((call) => call.op === "drawImage" && call.image === picture);
+  assert.ok(ellipse >= 0 && ellipse < clip && clip < draw, `${ellipse} ${clip} ${draw}`);
+  const empty = { ...framed, image: undefined };
+  const editing = canvasLog(1000, 1000);
+  const painter = new Painter(scene({ layers: [empty] }));
+  painter.animate = false;
+  painter.paint(editing.ctx, 0);
+  const playing = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [empty] })).paint(playing.ctx, 0);
+  const marks = (calls) => calls.filter((call) => call.op === "fill" || call.op === "stroke").length;
+  assert.ok(marks(editing.calls) > marks(playing.calls), "a placeholder while editing, nothing in the video");
+});
+
+test("a cropped picture is zoomed and moved inside its box, with any filter it has", () => {
+  const picture = { width: 1000, height: 1000 };
+  const layer = { id: "p", kind: "image", image: "a", x: 0, y: 0, w: 0.5, h: 0.5, rotation: 0, opacity: 1, crop: { x: 0, y: 0, zoom: 2 }, filter: "mono" };
+  const log = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [layer], images: new Map([["a", picture]]) })).paint(log.ctx, 0);
+  const draw = log.calls.find((call) => call.op === "drawImage" && call.image === picture);
+  assert.ok(Math.abs(draw.rect[2] - 1000) < 1e-6, `twice the 500 px box: ${draw.rect}`);
+  assert.match(draw.filter, /grayscale\(1\)/);
+});
+
+test("a shape can have a dashed border, and a line can end in an arrow", () => {
+  const log = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [{ id: "s", kind: "shape", shape: "rect", fill: "#eeeeee", stroke: "#111111", strokeWidth: 6, dash: "dashed", x: 0.1, y: 0.1, w: 0.3, h: 0.3, rotation: 0, opacity: 1 }] })).paint(log.ctx, 0);
+  assert.ok(log.calls.some((call) => call.op === "setLineDash" && call.args[0].length > 0));
+  assert.ok(log.calls.some((call) => call.op === "stroke" && call.strokeStyle === "#111111"));
+  const line = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [{ id: "l", kind: "shape", shape: "line", fill: "#00aa00", strokeWidth: 8, arrowEnd: true, x: 0.1, y: 0.5, w: 0.5, h: 0.04, rotation: 0, opacity: 1 }] })).paint(line.ctx, 0);
+  assert.ok(line.calls.some((call) => call.op === "stroke" && call.strokeStyle === "#00aa00"), "the line");
+  assert.ok(line.calls.some((call) => call.op === "fill" && call.fillStyle === "#00aa00"), "its arrowhead");
+  for (const shape of ["pentagon", "hexagon", "octagon", "cross", "parallelogram", "arch"]) {
+    const each = canvasLog(1000, 1000);
+    new Painter(scene({ layers: [{ id: "x", kind: "shape", shape, fill: "#abcdef", x: 0.1, y: 0.1, w: 0.3, h: 0.3, rotation: 0, opacity: 1 }] })).paint(each.ctx, 0);
+    assert.ok(each.calls.some((call) => call.op === "fill" && call.fillStyle === "#abcdef"), shape);
+  }
+});
+
+test("a layer's way in can wipe it on, clipped to what has been uncovered", () => {
+  const log = canvasLog(1080, 1080);
+  new Painter(scene({ layers: [words({ enter: "wipe", from: 0 })] })).paint(log.ctx, 0.1);
+  const clip = log.calls.findIndex((call) => call.op === "clip");
+  const text = log.calls.findIndex((call) => call.op === "fillText" && call.text === "Hello");
+  assert.ok(clip >= 0 && clip < text);
+});
+
+test("a picture is always held inside its box, framed or not, so a cover or a crop never spills past it", () => {
+  const picture = { width: 1600, height: 900 };
+  const layer = { id: "p", kind: "image", image: "a", x: 0.1, y: 0.1, w: 0.3, h: 0.3, rotation: 0, opacity: 1 };
+  const log = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [layer], images: new Map([["a", picture]]) })).paint(log.ctx, 0);
+  const clip = log.calls.findIndex((call) => call.op === "clip");
+  const draw = log.calls.findIndex((call) => call.op === "drawImage" && call.image === picture);
+  assert.ok(clip >= 0 && clip < draw, `${clip} ${draw}`);
+});
+
+test("a flipped graphic is mirrored, and captions keep the line spacing set for them", () => {
+  const art = { w: 24, h: 24, paths: [{ d: "M2 2L22 22", stroke: "currentColor", width: 2 }] };
+  const log = canvasLog(1000, 1000);
+  new Painter(scene({ layers: [{ id: "g", kind: "graphic", art, flipX: true, x: 0.1, y: 0.1, w: 0.2, h: 0.2, rotation: 0, opacity: 1 }] })).paint(log.ctx, 0);
+  assert.ok(log.calls.some((call) => call.op === "scale" && call.args[0] === -1), "mirrored across");
+  const cue = { start: 0, end: 4, text: "one two three four five six seven eight nine ten eleven twelve", words: undefined };
+  const rows = (lineHeight) => {
+    const each = canvasLog(1080, 1080);
+    new Painter(scene({ captions: [cue], layers: [{ id: "c", kind: "captions", x: 0.1, y: 0.1, w: 0.4, h: 0.8, rotation: 0, opacity: 1, size: 60, lineHeight }] })).paint(each.ctx, 1);
+    const ys = [...new Set(each.calls.filter((call) => call.op === "fillText").map((call) => Math.round(call.y)))].sort((a, b) => a - b);
+    return ys[1] - ys[0];
+  };
+  assert.ok(rows(2.5) > rows(1.15) * 1.5, `${rows(2.5)} vs ${rows(1.15)}`);
+});
+
+test("spaced-out words are centred on their letters, not on the space after the last one", () => {
+  const plain = canvasLog(1080, 1080);
+  const layer = { id: "w", kind: "text", text: "Hi", x: 0.1, y: 0.1, w: 0.8, h: 0.2, rotation: 0, opacity: 1, size: 60, align: "center" };
+  new Painter(scene({ layers: [layer] })).paint(plain.ctx, 0);
+  const spaced = canvasLog(1080, 1080);
+  new Painter(scene({ layers: [{ ...layer, letterSpacing: 500 }] })).paint(spaced.ctx, 0);
+  const x = (calls) => calls.find((call) => call.op === "fillText" && call.text === "Hi").x;
+  assert.ok(Math.abs(x(spaced.calls) - x(plain.calls) - 15) < 1e-6, `moved by half of 30 px: ${x(spaced.calls) - x(plain.calls)}`);
 });

@@ -15,7 +15,7 @@
   --ag-stage: #e9e7e0;
   --ag-radius: 10px;
   --ag-ease: cubic-bezier(0.23, 1, 0.32, 1);
-  container-type: inline-size;
+  container: ag / inline-size;
   position: relative;
   box-sizing: border-box;
   height: 100%;
@@ -89,7 +89,7 @@
 
 /* The body: tools down the left, one tool's panel open beside them, and the picture. */
 
-.ag-body { display: grid; grid-template-columns: 74px 290px minmax(0, 1fr); min-height: 0; }
+.ag-body { display: grid; grid-template-columns: 74px 320px minmax(0, 1fr); min-height: 0; }
 .ag-rail { display: flex; flex-direction: column; gap: 2px; padding: 8px 6px; border-right: 1px solid var(--ag-line); }
 .ag-tab {
   display: grid;
@@ -223,6 +223,68 @@
 .ag-more[open] summary { color: var(--ag-text); }
 .ag-more .ag-key { justify-self: start; height: 30px; font-size: 12.5px; }
 .ag-help { margin: 0; color: var(--ag-muted); font-size: 12px; text-wrap: pretty; }
+.ag-search { height: 36px; margin-bottom: 2px; }
+.ag-show-more { justify-self: start; height: 30px; font-size: 12.5px; }
+
+/* Graphics and stickers: drawings in a grid, each a key that adds it. */
+.ag-art-grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
+.ag-art { display: grid; place-items: center; aspect-ratio: 1; padding: 7px; border: 0; border-radius: 8px; background: var(--ag-surface); color: var(--ag-text); cursor: pointer; transition: background-color 120ms ease, transform 120ms ease; }
+.ag-art svg { width: 100%; height: 100%; overflow: visible; }
+.ag-sticker-grid .ag-art { padding: 5px; }
+@media (hover: hover) {
+  .ag-art:hover { background: var(--ag-bg); box-shadow: inset 0 0 0 1px var(--ag-line); }
+}
+.ag-art:active { transform: scale(0.94); }
+.ag-art:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
+
+/* Free photos and designs to start from: pictures in a grid. */
+.ag-photo-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.ag-photo { display: block; aspect-ratio: 4 / 3; padding: 0; overflow: hidden; border: 0; border-radius: 8px; background: var(--ag-surface); cursor: pointer; }
+.ag-photo img { display: block; width: 100%; height: 100%; object-fit: cover; transition: transform 200ms var(--ag-ease); }
+@media (hover: hover) {
+  .ag-photo:hover img { transform: scale(1.04); }
+}
+.ag-photo:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
+.ag-template-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.ag-template { display: grid; gap: 5px; padding: 0; border: 0; background: none; color: var(--ag-muted); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.ag-template-picture { display: block; width: 100%; height: auto; border-radius: 8px; background: var(--ag-surface); box-shadow: 0 0 0 1px var(--ag-line); transition: box-shadow 150ms ease, transform 150ms var(--ag-ease); }
+@media (hover: hover) {
+  .ag-template:hover { color: var(--ag-text); }
+  .ag-template:hover .ag-template-picture { box-shadow: 0 0 0 2px var(--ag-accent); }
+}
+.ag-template:active .ag-template-picture { transform: scale(0.98); }
+.ag-template:focus-visible { outline: none; }
+.ag-template:focus-visible .ag-template-picture { box-shadow: 0 0 0 2px var(--ag-text); }
+.ag-template-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Font pairs: each shows the two fonts it adds. */
+.ag-combos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.ag-combo { display: grid; gap: 2px; min-height: 64px; padding: 10px; border: 0; border-radius: 8px; background: var(--ag-surface); color: var(--ag-text); text-align: center; cursor: pointer; }
+.ag-combo-heading { overflow: hidden; font-size: 18px; line-height: 1.1; text-overflow: ellipsis; white-space: nowrap; }
+.ag-combo-body { color: var(--ag-muted); font-size: 11.5px; }
+@media (hover: hover) {
+  .ag-combo:hover { box-shadow: inset 0 0 0 1px var(--ag-edge); }
+}
+.ag-combo:focus-visible { outline: 2px solid var(--ag-text); outline-offset: 1px; }
+
+/* The download panel, under the Download key. */
+.ag-header { position: relative; }
+.ag-download {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 12px;
+  z-index: 7;
+  display: grid;
+  gap: 12px;
+  width: min(320px, calc(100% - 24px));
+  padding: 14px;
+  border-radius: 10px;
+  background: var(--ag-bg);
+  box-shadow: 0 0 0 1px var(--ag-line), 0 18px 40px -14px rgb(0 0 0 / 0.6);
+}
+.ag-download .ag-field { display: grid; gap: 6px; }
+.ag-download .ag-chips { max-width: none; }
+.ag-download-go { justify-content: center; height: 38px; background: var(--ag-accent); color: var(--ag-accent-ink); font-weight: 600; }
 
 /* The picture. */
 
@@ -309,7 +371,30 @@
 
 /* Free editing on the picture: the overlay over it, the selection with its handles, the guides it snaps to, the box
    words are typed in, and the bar of what can be changed above the picture. */
-.ag-stage { padding-top: 64px; }
+.ag-stage { padding-top: 64px; container: stage / inline-size; }
+/* A stage too narrow for the whole bar: the secondary keys show their icons only, and the size goes without its name;
+   the font, Effects, Animate and Position keep their words. */
+@container stage (max-width: 1080px) {
+  .ag-context :is([data-key="colour"], [data-key="highlight"], [data-key="fill"], [data-key="border"], [data-key="line"], [data-key="style"], [data-key="crop"], [data-key="frame"], [data-key="filters"], [data-key="adjust"], [data-key="flip"], [data-key="replace"], [data-key="more"]) .ag-key-text { display: none; }
+  .ag-context :is([data-key="colour"], [data-key="highlight"], [data-key="fill"]) { padding: 0 8px; }
+  .ag-size-name { display: none; }
+  .ag-font-key .ag-key-text { max-width: 92px; }
+}
+@container stage (max-width: 760px) {
+  .ag-context :is([data-key="effects"], [data-key="animate"], [data-key="position"]) .ag-key-text { display: none; }
+}
+/* The picture's own scroller, under the bar: it centres the picture, and scrolls once a zoom makes it larger. */
+.ag-scroll { position: absolute; inset: 64px 0 0; display: flex; overflow: auto; padding: 8px 24px 52px; overscroll-behavior: contain; }
+.ag-scroll .ag-preview { margin: auto; }
+.ag-stage[data-zoomed] .ag-preview { max-width: none; max-height: none; flex: none; }
+.ag-zoom-bar { position: absolute; right: 12px; bottom: 12px; z-index: 3; display: flex; align-items: center; gap: 2px; padding: 3px; border-radius: 10px; background: var(--ag-bg); box-shadow: 0 0 0 1px var(--ag-line), 0 6px 16px -8px rgb(0 0 0 / 0.4); }
+.ag-zoom-bar .ag-btn { width: 28px; height: 28px; background: none; }
+.ag-zoom-level { min-width: 52px; height: 28px; padding: 0 6px; border: 0; border-radius: 7px; background: none; color: var(--ag-text); font: inherit; font-size: 12.5px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.ag-zoom-level[aria-pressed="true"] { color: var(--ag-muted); }
+@media (hover: hover) {
+  .ag-zoom-level:hover { background: var(--ag-surface); }
+}
+.ag-zoom-level:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; }
 .ag-overlay { position: absolute; z-index: 1; outline: none; touch-action: none; cursor: default; }
 .ag[data-state="empty"] .ag-overlay, .ag[data-tapping] .ag-overlay { pointer-events: none; }
 .ag-overlay:focus-visible { box-shadow: 0 0 0 2px var(--ag-stage), 0 0 0 4px var(--ag-text); border-radius: 6px; }
@@ -345,6 +430,34 @@
 .ag-turn { left: 50%; top: -28px; cursor: grab; }
 .ag-turn::after { content: ""; position: absolute; left: 50%; top: 12px; width: 1.5px; height: 14px; translate: -50% 0; background: var(--ag-accent); }
 .ag-guides { position: absolute; inset: 0; pointer-events: none; }
+/* Several layers picked: a thin ring round each, and one box round all of them with no handles to pull. */
+.ag-members { position: absolute; inset: 0; pointer-events: none; }
+.ag-member { position: absolute; transform-origin: center; box-shadow: 0 0 0 1px var(--ag-accent); border-radius: 2px; }
+.ag-select[data-multi] :is(.ag-grip, .ag-turn) { display: none; }
+.ag-select[data-multi] { box-shadow: 0 0 0 1px rgb(0 0 0 / 0.4), 0 0 0 2px var(--ag-accent); border-radius: 3px; }
+/* Cropping: the box is dashed while the picture is dragged inside it. */
+.ag-select[data-crop] { box-shadow: 0 0 0 1px rgb(0 0 0 / 0.55), 0 0 0 2.5px var(--ag-accent); outline: 1.5px dashed rgb(255 255 255 / 0.9); outline-offset: -4px; }
+.ag-select[data-crop] :is(.ag-grip, .ag-turn) { display: none; }
+.ag-marquee { position: absolute; border: 1px solid var(--ag-accent); border-radius: 2px; background: rgb(47 240 184 / 0.12); pointer-events: none; }
+
+/* The right-click menu. */
+.ag-menu {
+  position: absolute;
+  z-index: 6;
+  display: grid;
+  gap: 1px;
+  min-width: 200px;
+  padding: 6px;
+  border-radius: 10px;
+  background: var(--ag-bg);
+  box-shadow: 0 0 0 1px var(--ag-line), 0 16px 36px -12px rgb(0 0 0 / 0.55);
+}
+.ag-menu .ag-menu-item { justify-content: flex-start; width: 100%; height: 32px; padding: 0 10px 0 8px; background: none; font-size: 13px; }
+@media (hover: hover) {
+  .ag-menu .ag-menu-item:hover { background: var(--ag-surface); }
+}
+.ag-menu .ag-menu-item:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; }
+.ag-menu-rule { height: 1px; margin: 4px 6px; background: var(--ag-line); }
 .ag-guide { position: absolute; background: #ff4fa3; }
 .ag-guide-x { top: 0; bottom: 0; width: 1px; margin-left: -0.5px; }
 .ag-guide-y { left: 0; right: 0; height: 1px; margin-top: -0.5px; }
@@ -431,10 +544,18 @@
 .ag-custom-colour input { width: 32px; height: 26px; padding: 0; border: 0; border-radius: 6px; background: none; cursor: pointer; }
 .ag-pop-actions { display: grid; gap: 4px; }
 .ag-pop-actions .ag-key { justify-content: flex-start; height: 32px; font-size: 12.5px; }
-.ag-pop-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 240px; }
+.ag-pop-pair { grid-template-columns: repeat(2, minmax(0, 1fr)); width: 260px; }
+/* Choices as small keys that wrap: effects, ways in, filters, frames, dashes. */
+.ag-chips { display: flex; flex-wrap: wrap; gap: 4px; max-width: 280px; }
+.ag-chips .ag-chip { height: 30px; padding: 0 10px; font-size: 12.5px; }
+.ag-chips .ag-chip svg { display: none; }
+.ag-chip[aria-pressed="true"], .ag-chip[aria-checked="true"] { background: var(--ag-accent); color: var(--ag-accent-ink); }
+.ag-pop { max-height: min(560px, calc(100% - 72px)); overflow-y: auto; overscroll-behavior: contain; }
+.ag-underline { text-decoration: underline; text-underline-offset: 2px; font-family: inherit; font-weight: 600; }
+.ag-strike { text-decoration: line-through; font-family: inherit; font-weight: 600; }
 .ag-edge-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; width: 240px; }
 .ag-edge-grid .ag-key { justify-content: flex-start; height: 32px; padding: 0 8px; font-size: 12.5px; }
-.ag-times { grid-template-columns: minmax(0, 1fr); }
+.ag-position.ag-times { grid-template-columns: minmax(0, 1fr); width: 260px; }
 .ag-time-row { display: flex; gap: 6px; }
 .ag-time-row .ag-input { flex: 1; min-width: 0; height: 32px; font-variant-numeric: tabular-nums; }
 .ag-time-row .ag-key { height: 32px; font-size: 12.5px; }
@@ -508,6 +629,12 @@
 .ag-layer-pick:focus-visible { outline: 2px solid var(--ag-text); outline-offset: -2px; }
 .ag-layer-toggle, .ag-layer-toggle[aria-pressed="true"] { width: 32px; height: 32px; padding: 0; background: none; color: var(--ag-muted); }
 .ag-layer-toggle[aria-pressed="false"] { color: var(--ag-text); background: var(--ag-surface); }
+/* A layer's stretch of the clip, under its name: a bar with an end to drag on each side. */
+.ag-layer-time { position: relative; grid-column: 1 / -1; height: 14px; margin: -2px 10px 6px; border-radius: 3px; background: var(--ag-line); touch-action: none; }
+.ag-layer-bar { position: absolute; top: 3px; bottom: 3px; border-radius: 2px; background: var(--ag-accent); opacity: 0.75; cursor: grab; }
+.ag-layer-end { position: absolute; top: -1px; width: 10px; height: 16px; margin-left: -5px; border-radius: 3px; background: var(--ag-text); cursor: ew-resize; outline: none; }
+.ag-layer-end:focus-visible { box-shadow: 0 0 0 2px var(--ag-bg), 0 0 0 4px var(--ag-text); }
+.ag-layer-end::before { content: ""; position: absolute; inset: -8px -6px; }
 
 /* The recording. */
 
@@ -647,12 +774,15 @@
 
 /* Narrow: the picture first, the recording under it, the tools as a row of tabs, and the open tool's panel below;
    the page scrolls rather than any panel. */
-@container (max-width: 760px) {
+@container ag (max-width: 760px) {
   .ag-frame { display: flex; flex-direction: column; height: auto; min-height: 0; }
   .ag-stage { contain: none; }
   .ag-body { display: contents; }
   .ag-header { order: 0; padding: 8px 10px; }
   .ag-stage { order: 1; padding: 60px 12px 12px; }
+  /* The picture sits in the page's flow and the page scrolls; a phone zooms with two fingers. */
+  .ag-scroll { position: relative; inset: auto; padding: 0; overflow: visible; }
+  .ag-zoom-bar { display: none; }
   .ag-context { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
   .ag-context::-webkit-scrollbar { display: none; }
   .ag-context > * { flex: none; }

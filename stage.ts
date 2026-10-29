@@ -4,8 +4,8 @@
    keyboard, Tab steps through the layers on the picture and Enter types into words. */
 
 import { formatTime, parseTime } from "./captions.js";
-import { alignToPage, layerAt, moveLayer, resizeTurned, rotateLayer, snapMove, type Entrance, type Guide, type Handle, type Layer, type PageEdge } from "./layers.js";
-import { paintOf, type Theme, type Visual } from "./render.js";
+import { alignToPage, layerAt, moveLayer, resizeTurned, rotateLayer, snapMove, type Box, type Entrance, type Guide, type Handle, type Layer, type Loop, type PageEdge, type ShapeKind, type TextEffect } from "./layers.js";
+import { FILTERS, paintOf, type Theme, type Visual } from "./render.js";
 import { element, iconButton, ICONS, keyButton } from "./ui.js";
 
 /** A font the editor offers: its family as the canvas names it, and its files, each loaded only when needed. */
@@ -95,11 +95,61 @@ export interface StageLabels {
   copied: (layer: string) => string;
   style: string;
   visualNames: Record<Visual, string>;
+  underline: string;
+  strike: string;
+  list: string;
+  listNames: { none: string; bullet: string; number: string };
+  spacing: string;
+  letterSpacing: string;
+  lineHeight: string;
+  curve: string;
+  effectNames: Record<"none" | "shadow" | "outline" | "background" | TextEffect, string>;
+  effectColour: string;
+  transparency: string;
+  positionPanel: string;
+  arrange: string;
+  toFront: string;
+  toBack: string;
+  advanced: string;
+  alignSelection: string;
+  distribute: string;
+  distributeAcross: string;
+  distributeDown: string;
+  group: string;
+  ungroup: string;
+  selectAll: string;
+  copyStyle: string;
+  pasteStyle: string;
+  border: string;
+  borderWeight: string;
+  borderStyle: string;
+  dashNames: { solid: string; dashed: string; dotted: string };
+  line: string;
+  arrowStart: string;
+  arrowEnd: string;
+  crop: string;
+  zoom: string;
+  resetCrop: string;
+  frame: string;
+  frameNames: Record<"none" | ShapeKind, string>;
+  filters: string;
+  filterNames: Record<string, string>;
+  original: string;
+  in: string;
+  out: string;
+  loopName: string;
+  loopNames: Record<Loop, string>;
+  speed: string;
+  selection: (count: number) => string;
+  grouped: (count: number) => string;
+  ungrouped: string;
 }
 
 export interface StageHost {
   stage: HTMLElement;
   canvas: HTMLCanvasElement;
+  /** Where the picture scrolls when it is zoomed in; the overlay over it goes in here. The stage when left out. */
+  surface?: HTMLElement;
   labels: StageLabels;
   layers(): Layer[];
   /** Puts `next` in place of the layers; `done` ends a gesture, so it is undone as one step. */
@@ -127,10 +177,16 @@ export interface StageHost {
   replace(layer: Layer): void;
   /** Where the playhead is, in seconds into the clip, for a layer's times. */
   time(): number;
+  /** A picture or video layer's own size in pixels, for cropping it; null while it isn't loaded. */
+  mediaSize(layer: Layer): { width: number; height: number } | null;
+  /** Adds a part from a key on the picture: T for text, R for a square, C for a circle, L for a line. */
+  add(what: "text" | "rect" | "circle" | "line"): void;
 }
 
 export interface Stage {
   readonly selected: Layer | null;
+  /** Lets go of the listeners the stage put on the document. */
+  destroy(): void;
   select(id: string | null): void;
   /** Lines the selection and the bar up again after the picture or its layers change. */
   refresh(): void;
@@ -145,7 +201,13 @@ const SINGLE_LINE = new Set(["name", "handle"]);
 const TYPEWRITER_KINDS = new Set(["name", "handle", "title", "links", "time", "text"]);
 const PICTURE_KINDS = new Set(["image", "video"]);
 const EDGES: Array<[PageEdge, keyof typeof ICONS]> = [["left", "alignLeft"], ["center", "alignCenter"], ["right", "alignRight"], ["top", "alignTop"], ["middle", "alignMiddle"], ["bottom", "alignBottom"]];
-const ENTRANCES: Entrance[] = ["fade", "rise", "pop", "slide", "typewriter"];
+const ENTRANCES: Entrance[] = ["fade", "rise", "pan", "pop", "wipe", "blur", "zoom", "breathe", "baseline", "drift", "tumble", "stomp", "bounce", "flicker", "typewriter"];
+const EXITS: Entrance[] = ["fade", "rise", "pan", "pop", "wipe", "blur", "zoom", "drift", "tumble"];
+const LOOPS: Loop[] = ["pulse", "wiggle", "rotate", "float"];
+const EFFECTS = ["none", "shadow", "lift", "hollow", "splice", "outline", "echo", "glitch", "neon", "background"] as const;
+const FRAMES: Array<"none" | ShapeKind> = ["none", "ellipse", "rect", "triangle", "diamond", "star", "heart", "hexagon", "arch", "bubble"];
+// What Copy style carries from one layer to another: its look, not its place or its words.
+const STYLE_KEYS = ["font", "size", "weight", "italic", "color", "highlight", "align", "shadow", "outline", "background", "uppercase", "effect", "effectColor", "underline", "strike", "letterSpacing", "lineHeight", "list", "fill", "stroke", "strokeWidth", "dash", "radius", "opacity", "filter", "adjust"] as const;
 const HANDLES: Handle[] = ["nw", "n", "ne", "e", "se", "s", "sw", "w"];
 const PALETTE = ["#ffffff", "#111111", "#ff3b30", "#ff9500", "#ffcc00", "#34c759", "#2ff0b8", "#0a84ff", "#5e5ce6", "#bf5af2", "#ff2d55", "#8e8e93"];
 const ALIGN_ICONS = {
@@ -156,8 +218,9 @@ const ALIGN_ICONS = {
 
 let made = 0;
 const newId = (kind: string) => `${kind}-${Date.now().toString(36)}${(made++).toString(36)}`;
-// The layer Copy took, ready to paste into any picture on the page.
-let clipboard: Layer | null = null;
+// The layers Copy took, ready to paste into any picture on the page, and the look Copy style took.
+let clipboard: Layer[] = [];
+let styleClip: Partial<Layer> | null = null;
 let pops = 0;
 
 /** The heaviest weight a font's files cover: 900 for a variable 100–900 font, 400 for a single regular file. */
@@ -186,7 +249,13 @@ export function createStage(host: StageHost): Stage {
   typing.hidden = true;
   typing.rows = 1;
   typing.spellcheck = true;
-  overlay.append(guides, hover, box, typing);
+  const marquee = element("div", "ag-marquee");
+  marquee.hidden = true;
+  const members = element("div", "ag-members");
+  overlay.append(guides, members, hover, box, marquee, typing);
+  const menu = element("div", "ag-menu");
+  menu.setAttribute("role", "menu");
+  menu.hidden = true;
   const toolbar = element("div", "ag-context");
   toolbar.setAttribute("role", "toolbar");
   toolbar.hidden = true;
@@ -194,21 +263,27 @@ export function createStage(host: StageHost): Stage {
   pop.hidden = true;
   pop.setAttribute("role", "dialog");
   pop.id = `ag-pop-${++pops}`;
-  host.stage.append(overlay, toolbar, pop);
+  const surface = host.surface ?? host.stage;
+  surface.append(overlay);
+  host.stage.append(toolbar, pop, menu);
+  surface.addEventListener("scroll", () => draw(), { passive: true });
 
+  const gone = new AbortController();
   let selectedId: string | null = null;
+  // The rest of the selection when more than one layer is picked, the one picked last being selectedId.
+  let others: string[] = [];
   let editing: string | null = null;
   let toolbarFor = "";
   const find = (id: string | null) => host.layers().find((layer) => layer.id === id) ?? null;
   const size = () => ({ width: overlay.clientWidth || 1, height: overlay.clientHeight || 1 });
   const visible = () => host.layers().filter((layer) => !layer.hidden && !layer.locked);
 
-  // The overlay sits exactly over the picture, wherever the stage has put it.
+  // The overlay sits exactly over the picture, wherever the stage has put it and however far it is scrolled.
   function place() {
     const canvas = host.canvas.getBoundingClientRect();
-    const stage = host.stage.getBoundingClientRect();
-    overlay.style.left = `${canvas.left - stage.left}px`;
-    overlay.style.top = `${canvas.top - stage.top}px`;
+    const stage = surface.getBoundingClientRect();
+    overlay.style.left = `${canvas.left - stage.left + (surface === host.stage ? 0 : surface.scrollLeft)}px`;
+    overlay.style.top = `${canvas.top - stage.top + (surface === host.stage ? 0 : surface.scrollTop)}px`;
     overlay.style.width = `${canvas.width}px`;
     overlay.style.height = `${canvas.height}px`;
   }
@@ -222,11 +297,43 @@ export function createStage(host: StageHost): Stage {
     node.style.transform = layer.rotation ? `rotate(${layer.rotation}deg)` : "";
   };
 
+  /** Every picked layer, the one picked last first. */
+  const picked = () => [selectedId, ...others].map(find).filter((layer): layer is Layer => layer !== null && !layer.hidden);
+  const multi = () => others.length > 0;
+  /** The upright box round some layers, turned or not, in frame fractions. */
+  function bounds(layers: Layer[]): Box {
+    const { width, height } = size();
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const layer of layers) {
+      const angle = (layer.rotation * Math.PI) / 180;
+      const halfX = (Math.abs(layer.w * width * Math.cos(angle)) + Math.abs(layer.h * height * Math.sin(angle))) / 2 / width;
+      const halfY = (Math.abs(layer.w * width * Math.sin(angle)) + Math.abs(layer.h * height * Math.cos(angle))) / 2 / height;
+      const cx = layer.x + layer.w / 2;
+      const cy = layer.y + layer.h / 2;
+      left = Math.min(left, cx - halfX);
+      right = Math.max(right, cx + halfX);
+      top = Math.min(top, cy - halfY);
+      bottom = Math.max(bottom, cy + halfY);
+    }
+    return { x: left, y: top, w: right - left, h: bottom - top };
+  }
+
   function draw() {
     place();
     const layer = find(selectedId);
+    const group = multi() ? picked() : [];
+    members.replaceChildren(...group.map((member) => {
+      const node = element("span", "ag-member");
+      frameOf(node, member);
+      return node;
+    }));
     box.hidden = !layer || layer.hidden === true || !host.enabled() || editing !== null;
-    if (layer && !box.hidden) {
+    box.toggleAttribute("data-multi", group.length > 1);
+    if (layer && !box.hidden && group.length > 1) frameOf(box, { ...layer, ...bounds(group), rotation: 0 });
+    else if (layer && !box.hidden) {
       frameOf(box, layer);
       const { width, height } = size();
       box.toggleAttribute("data-words", TEXT_KINDS.has(layer.kind));
@@ -267,10 +374,30 @@ export function createStage(host: StageHost): Stage {
     buildToolbar(find(layer.id));
   }
 
+  /** Several layers changed at once, as one step when `done`. */
+  function replaceMany(next: Map<string, Layer>, done: boolean) {
+    changing = true;
+    try {
+      host.change(host.layers().map((item) => next.get(item.id) ?? item), done);
+    } finally {
+      changing = false;
+    }
+    if (selectedId && next.has(selectedId)) toolbarFor = JSON.stringify(find(selectedId));
+    draw();
+  }
+
+  /** The same change to every picked layer, as one step. */
+  function updateAll(change: (layer: Layer) => Partial<Layer>) {
+    replaceMany(new Map(picked().map((layer) => [layer.id, { ...layer, ...change(layer) }])), true);
+    buildToolbar(find(selectedId));
+  }
+
   // Pointer: select, move, size and turn. On a touch screen a first touch only selects, so a swipe over the picture
   // still scrolls the page; the selected layer can then be dragged.
 
-  let gesture: { kind: "move" | "resize" | "rotate"; pointerId: number; x: number; y: number; start: Layer; handle?: Handle; moved: boolean; wasSelected: boolean } | null = null;
+  let gesture: { kind: "move" | "resize" | "rotate" | "group" | "marquee" | "crop"; pointerId: number; x: number; y: number; start: Layer; handle?: Handle; moved: boolean; wasSelected: boolean; starts?: Layer[]; from?: { x: number; y: number } } | null = null;
+  // The picture layer whose crop is open: a drag on it moves the picture inside its box.
+  let cropping: string | null = null;
   const pointAt = (event: PointerEvent | MouseEvent) => {
     const rect = overlay.getBoundingClientRect();
     return { x: (event.clientX - rect.left) / rect.width, y: (event.clientY - rect.top) / rect.height };
@@ -278,25 +405,57 @@ export function createStage(host: StageHost): Stage {
 
   overlay.addEventListener("pointerdown", (event) => {
     if (!host.enabled() || event.button !== 0 || event.target === typing) return;
-    closePop();
+    closeMenu();
     const handle = (event.target as HTMLElement).dataset.handle;
     const current = find(selectedId);
+    const point = pointAt(event);
+    const { width, height } = size();
+    const under = layerAt(host.layers(), point.x, point.y, width, height);
+    // While a crop is open, a drag on its picture moves the picture inside the box.
+    if (cropping && under?.id === cropping && !handle) {
+      gesture = { kind: "crop", pointerId: event.pointerId, x: event.clientX, y: event.clientY, start: under, moved: false, wasSelected: true };
+      try {
+        overlay.setPointerCapture(event.pointerId);
+      } catch {
+        // A pointer from a script can't be captured; the drag still follows it over the picture.
+      }
+      event.preventDefault();
+      return;
+    }
+    closePop();
     let start: Layer | null = null;
-    let kind: "move" | "resize" | "rotate" = "move";
-    if (handle && current) {
+    let kind: "move" | "resize" | "rotate" | "group" | "marquee" = "move";
+    if (handle && current && !multi()) {
       start = current;
       kind = handle === "rotate" ? "rotate" : "resize";
+    } else if (event.shiftKey && under) {
+      // Shift adds a layer to the selection, or takes it out.
+      toggle(under.id);
+      return;
+    } else if (under && multi() && picked().some((layer) => layer.id === under.id)) {
+      start = under;
+      kind = "group";
     } else {
-      const point = pointAt(event);
-      const { width, height } = size();
-      start = layerAt(host.layers(), point.x, point.y, width, height);
+      start = under;
       const already = start !== null && start.id === selectedId;
       select(start?.id ?? null);
+      if (start && multi()) kind = "group";
       if (event.pointerType === "touch" && !already) return;
+      // A drag from the empty page draws a box round the layers to pick.
+      if (!start && event.pointerType !== "touch") {
+        gesture = { kind: "marquee", pointerId: event.pointerId, x: event.clientX, y: event.clientY, start: null as unknown as Layer, moved: false, wasSelected: false, from: point };
+        capture(event);
+        return;
+      }
     }
     // A locked layer is picked, to be unlocked, but stays where it is.
-    if (!start || start.locked) return;
-    gesture = { kind, pointerId: event.pointerId, x: event.clientX, y: event.clientY, start, handle: kind === "resize" ? (handle as Handle) : undefined, moved: false, wasSelected: current?.id === start.id };
+    if (!start || start.locked || (kind === "group" && picked().some((layer) => layer.locked))) return;
+    gesture = { kind, pointerId: event.pointerId, x: event.clientX, y: event.clientY, start, handle: kind === "resize" ? (handle as Handle) : undefined, moved: false, wasSelected: current?.id === start.id, starts: kind === "group" ? picked() : undefined };
+    capture(event);
+    event.preventDefault();
+  });
+
+  function capture(event: PointerEvent) {
     try {
       overlay.setPointerCapture(event.pointerId);
     } catch {
@@ -305,7 +464,7 @@ export function createStage(host: StageHost): Stage {
     // Focus for the keys, without the ring a keyboard user would see.
     overlay.focus({ preventScroll: true, focusVisible: false } as FocusOptions);
     event.preventDefault();
-  });
+  }
 
   overlay.addEventListener("pointermove", (event) => {
     if (!gesture || gesture.pointerId !== event.pointerId) {
@@ -325,6 +484,43 @@ export function createStage(host: StageHost): Stage {
     gesture.moved = true;
     hover.hidden = true;
     const start = gesture.start;
+    if (gesture.kind === "marquee") {
+      const from = gesture.from!;
+      const to = pointAt(event);
+      const area = { x: Math.min(from.x, to.x), y: Math.min(from.y, to.y), w: Math.abs(to.x - from.x), h: Math.abs(to.y - from.y) };
+      marquee.hidden = false;
+      marquee.style.left = `${area.x * width}px`;
+      marquee.style.top = `${area.y * height}px`;
+      marquee.style.width = `${area.w * width}px`;
+      marquee.style.height = `${area.h * height}px`;
+      return;
+    }
+    if (gesture.kind === "crop") {
+      const media = host.mediaSize(start);
+      if (!media) return;
+      // How far the picture spills past its box on each side, in pixels on screen, sets how far a drag moves it.
+      const boxW = start.w * width;
+      const boxH = start.h * height;
+      const scale = Math.max(boxW / media.width, boxH / media.height) * Math.max(1, start.crop?.zoom ?? 1);
+      const spareX = media.width * scale - boxW;
+      const spareY = media.height * scale - boxH;
+      const crop = { zoom: 1, x: 0, y: 0, ...start.crop };
+      const angle = (-start.rotation * Math.PI) / 180;
+      const along = (dx * Math.cos(angle) - dy * Math.sin(angle)) * (start.flipX ? -1 : 1);
+      const down = (dx * Math.sin(angle) + dy * Math.cos(angle)) * (start.flipY ? -1 : 1);
+      replaceLayer({ ...start, crop: { ...crop, x: spareX > 1 ? Math.max(-1, Math.min(1, crop.x - (along * 2) / spareX)) : 0, y: spareY > 1 ? Math.max(-1, Math.min(1, crop.y - (down * 2) / spareY)) : 0 } }, false);
+      return;
+    }
+    if (gesture.kind === "group") {
+      const starts = gesture.starts!;
+      const area = bounds(starts);
+      const moved = { ...area, x: area.x + dx / width, y: area.y + dy / height };
+      const ids = new Set(starts.map((layer) => layer.id));
+      const snapped = event.altKey ? { ...moved, guides: [] } : snapMove(moved, visible().filter((layer) => !ids.has(layer.id)), width, height, 6);
+      showGuides(snapped.guides);
+      replaceMany(new Map(starts.map((layer) => [layer.id, { ...layer, ...moveLayer(layer, snapped.x - area.x, snapped.y - area.y) }])), false);
+      return;
+    }
     let next: Layer;
     if (gesture.kind === "move") {
       const moved = moveLayer(start, dx / width, dy / height);
@@ -349,9 +545,25 @@ export function createStage(host: StageHost): Stage {
 
   const endGesture = (event: PointerEvent) => {
     if (!gesture) return;
-    const { moved, start, wasSelected, kind } = gesture;
+    const { moved, start, wasSelected, kind, from } = gesture;
     gesture = null;
     showGuides([]);
+    if (kind === "marquee") {
+      marquee.hidden = true;
+      if (!moved || !from) return;
+      const to = pointAt(event);
+      const area = { x: Math.min(from.x, to.x), y: Math.min(from.y, to.y), w: Math.abs(to.x - from.x), h: Math.abs(to.y - from.y) };
+      const inside = visible().filter((layer) => {
+        const edge = bounds([layer]);
+        return edge.x < area.x + area.w && edge.x + edge.w > area.x && edge.y < area.y + area.h && edge.y + edge.h > area.y;
+      });
+      selectMany(inside.map((layer) => layer.id));
+      return;
+    }
+    if (moved && kind === "crop") {
+      host.change(host.layers(), true);
+      return;
+    }
     if (moved) {
       host.change(host.layers(), true);
       buildToolbar(find(start.id));
@@ -366,7 +578,7 @@ export function createStage(host: StageHost): Stage {
   overlay.addEventListener("pointerleave", () => (hover.hidden = true));
   // Pressing the grey around the picture lets go.
   host.stage.addEventListener("pointerdown", (event) => {
-    if (event.target === host.stage) select(null);
+    if (event.target === host.stage || event.target === surface) select(null);
   });
 
   overlay.addEventListener("dblclick", (event) => {
@@ -377,13 +589,30 @@ export function createStage(host: StageHost): Stage {
     if (under) openLayer(under);
   });
 
-  /** Types into words, or opens the panel where a layer's words or picture come from. */
+  /** Types into words, crops a picture (or asks for one when the frame is empty), or opens the panel a layer's words
+   *  come from. */
   function openLayer(layer: Layer) {
     if (layer.locked) return;
     if (TYPED_KINDS.has(layer.kind)) editText(layer.id);
-    else if (layer.kind === "image" || layer.kind === "avatar") host.replace(layer);
+    else if (PICTURE_KINDS.has(layer.kind) && layer.image && host.mediaSize(layer)) {
+      select(layer.id);
+      const key = toolbar.querySelector<HTMLElement>('[data-key="crop"]');
+      if (key) cropPop(key, layer);
+    } else if (layer.kind === "image" || layer.kind === "avatar") host.replace(layer);
     else host.open(layer);
   }
+
+  // The menu a right click opens on the picture, with what the bar and the keys do for the layers under it.
+  overlay.addEventListener("contextmenu", (event) => {
+    if (!host.enabled()) return;
+    event.preventDefault();
+    const point = pointAt(event);
+    const { width, height } = size();
+    const under = layerAt(host.layers(), point.x, point.y, width, height);
+    if (under && !picked().some((layer) => layer.id === under.id)) select(under.id);
+    if (!under && !multi()) select(null);
+    openMenu(event.clientX, event.clientY);
+  });
 
   // Keys on the picture. Tab steps through the layers and on past the last; arrows nudge a pixel (ten with Shift);
   // Enter types into words; Delete removes; Ctrl or Cmd with D duplicates, C copies, X cuts and V pastes; Escape lets go.
@@ -406,9 +635,20 @@ export function createStage(host: StageHost): Stage {
       return;
     }
     const command = event.ctrlKey || event.metaKey;
-    if (command && event.key.toLowerCase() === "v" && clipboard) {
+    const key = event.key.toLowerCase();
+    if (command && (key === "z" || key === "y") && nudgeTimer) {
+      clearTimeout(nudgeTimer);
+      nudgeTimer = 0;
+      host.change(host.layers(), true);
+    }
+    if (command && key === "v" && clipboard.length) {
       event.preventDefault();
       paste();
+      return;
+    }
+    if (command && key === "a") {
+      event.preventDefault();
+      selectMany(visible().map((item) => item.id));
       return;
     }
     if (!layer) {
@@ -416,38 +656,69 @@ export function createStage(host: StageHost): Stage {
       if ((event.key === "Enter" || event.key === "ArrowDown") && order.length) {
         event.preventDefault();
         select(order[order.length - 1].id);
+        return;
+      }
+      // Single keys add a part, as in a design tool: T text, R a square, C a circle, L a line.
+      const adds: Record<string, "text" | "rect" | "circle" | "line"> = { t: "text", r: "rect", c: "circle", l: "line" };
+      if (!command && !event.altKey && adds[key]) {
+        event.preventDefault();
+        host.add(adds[key]);
       }
       return;
     }
-    if (command && (event.key.toLowerCase() === "c" || event.key.toLowerCase() === "x")) {
+    if (command && (key === "c" || key === "x")) {
       event.preventDefault();
-      copy(layer);
-      if (event.key.toLowerCase() === "x" && !layer.locked) removeLayer(layer);
+      copy();
+      if (key === "x" && !picked().some((item) => item.locked)) removeLayers();
       return;
     }
     if (event.key === "Escape") return select(null);
-    // A locked layer keeps still: only Tab, Escape and Copy reach it.
-    if (layer.locked) return;
+    if (command && key === "g") {
+      event.preventDefault();
+      if (event.shiftKey) ungroup();
+      else group();
+      return;
+    }
+    if (event.altKey && event.shiftKey && event.code === "KeyL") {
+      event.preventDefault();
+      lock(layer, !layer.locked);
+      return;
+    }
+    // A locked layer keeps still: only Tab, Escape, Copy and Unlock reach it.
+    if (picked().some((item) => item.locked)) return;
+    if (command && (event.code === "BracketRight" || event.code === "BracketLeft")) {
+      event.preventDefault();
+      arrange(event.code === "BracketRight" ? (event.shiftKey ? "front" : "forward") : event.shiftKey ? "back" : "backward");
+      return;
+    }
+    if (command && !multi() && TEXT_KINDS.has(layer.kind) && (key === "b" || key === "i" || key === "u")) {
+      event.preventDefault();
+      if (key === "b") update(layer, { weight: (layer.weight ?? 400) >= 600 ? 400 : 700 });
+      else if (key === "i") update(layer, { italic: !layer.italic });
+      else update(layer, { underline: !layer.underline });
+      return;
+    }
     const { width, height } = size();
     const step = event.shiftKey ? 10 : 1;
     const nudge: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
     if (nudge[event.key]) {
       event.preventDefault();
       const [dx, dy] = nudge[event.key];
-      replaceLayer({ ...layer, ...moveLayer(layer, dx / width, dy / height) }, false);
+      replaceMany(new Map(picked().map((item) => [item.id, { ...item, ...moveLayer(item, dx / width, dy / height) }])), false);
       // A run of nudges is one step to undo.
       clearTimeout(nudgeTimer);
       nudgeTimer = window.setTimeout(() => {
+        nudgeTimer = 0;
         host.change(host.layers(), true);
         buildToolbar(find(selectedId));
       }, 400);
     } else if (event.key === "Delete" || event.key === "Backspace") {
       event.preventDefault();
-      removeLayer(layer);
-    } else if (command && event.key.toLowerCase() === "d") {
+      removeLayers();
+    } else if (command && key === "d") {
       event.preventDefault();
-      duplicate(layer);
-    } else if (event.key === "Enter") {
+      duplicate();
+    } else if (event.key === "Enter" && !multi()) {
       event.preventDefault();
       openLayer(layer);
     }
@@ -547,28 +818,146 @@ export function createStage(host: StageHost): Stage {
     overlay.focus({ preventScroll: true });
   }
 
-  function duplicate(layer: Layer) {
-    const twin = { ...moveLayer(layer, 0.03, 0.03), id: newId(layer.kind), locked: false };
-    const list = host.layers();
-    const at = list.findIndex((item) => item.id === layer.id);
-    host.change([...list.slice(0, at + 1), twin, ...list.slice(at + 1)], true);
-    select(twin.id);
-    host.announce(labels.duplicated(host.layerName(layer)));
+  /** Every picked layer goes, as one step. */
+  function removeLayers() {
+    const leaving = picked();
+    if (leaving.length === 1) return removeLayer(leaving[0]);
+    const ids = new Set(leaving.map((layer) => layer.id));
+    const captionsLeft = host.layers().some((item) => item.kind === "captions" && !item.hidden && !ids.has(item.id));
+    const lastCaptions = captionsLeft ? null : leaving.find((layer) => layer.kind === "captions");
+    host.change(host.layers().flatMap((item) => (item.id === lastCaptions?.id ? [{ ...item, hidden: true }] : ids.has(item.id) ? [] : [item])), true);
+    host.announce(labels.deleted(labels.selection(leaving.length)));
+    select(null);
+    overlay.focus({ preventScroll: true });
   }
 
-  function copy(layer: Layer) {
-    clipboard = { ...layer };
-    host.announce(labels.copied(host.layerName(layer)));
+  /** Copies of `layers` moved a little down and right, with new ids and a new group for each group among them. */
+  function twins(layers: Layer[]): Layer[] {
+    const groups = new Map<string, string>();
+    return layers.map((layer) => {
+      const group = layer.group ? (groups.get(layer.group) ?? groups.set(layer.group, newId("group")).get(layer.group)) : undefined;
+      return { ...moveLayer(layer, 0.03, 0.03), id: newId(layer.kind), hidden: false, locked: false, group };
+    });
   }
 
-  /** The copied layer, on top, a little down and to the right of where it was so the two can be told apart. */
+  /** Copies of the picked layers, each over its original; the copies are picked. */
+  function duplicate() {
+    const originals = picked();
+    if (!originals.length) return;
+    const copies = twins(originals);
+    const byOriginal = new Map(originals.map((layer, index) => [layer.id, copies[index]]));
+    host.change(host.layers().flatMap((item) => (byOriginal.has(item.id) ? [item, byOriginal.get(item.id)!] : [item])), true);
+    selectMany(copies.map((layer) => layer.id));
+    host.announce(labels.duplicated(originals.length === 1 ? host.layerName(originals[0]) : labels.selection(originals.length)));
+  }
+
+  function copy() {
+    const layers = picked();
+    if (!layers.length) return;
+    // In their order on the page, so a paste stacks them the same way.
+    const order = host.layers().map((item) => item.id);
+    clipboard = layers.map((layer) => ({ ...layer })).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+    host.announce(labels.copied(layers.length === 1 ? host.layerName(layers[0]) : labels.selection(layers.length)));
+  }
+
+  /** The copied layers, on top, a little down and to the right of where they were so the two can be told apart. */
   function paste() {
-    if (!clipboard) return;
-    const twin = { ...moveLayer(clipboard, 0.03, 0.03), id: newId(clipboard.kind), hidden: false, locked: false };
-    clipboard = twin;
-    host.change([...host.layers(), twin], true);
-    select(twin.id);
-    host.announce(labels.duplicated(host.layerName(twin)));
+    if (!clipboard.length) return;
+    const copies = twins(clipboard);
+    clipboard = copies.map((layer) => ({ ...layer }));
+    host.change([...host.layers(), ...copies], true);
+    selectMany(copies.map((layer) => layer.id));
+    host.announce(labels.duplicated(copies.length === 1 ? host.layerName(copies[0]) : labels.selection(copies.length)));
+  }
+
+  /** The picked layers become one group, picked and moved together from then on. */
+  function group() {
+    const layers = picked();
+    if (layers.length < 2) return;
+    const id = newId("group");
+    replaceMany(new Map(layers.map((layer) => [layer.id, { ...layer, group: id }])), true);
+    host.announce(labels.grouped(layers.length));
+    buildToolbar(find(selectedId));
+  }
+
+  function ungroup() {
+    const layers = picked().filter((layer) => layer.group);
+    if (!layers.length) return;
+    replaceMany(new Map(layers.map((layer) => [layer.id, { ...layer, group: undefined }])), true);
+    host.announce(labels.ungrouped);
+    buildToolbar(find(selectedId));
+  }
+
+  /** The picked layers moved up or down the stack together, one step or all the way. */
+  function arrange(way: "forward" | "backward" | "front" | "back") {
+    const ids = new Set(picked().map((layer) => layer.id));
+    if (!ids.size) return;
+    const list = host.layers();
+    const moving = list.filter((layer) => ids.has(layer.id));
+    const rest = list.filter((layer) => !ids.has(layer.id));
+    let next: Layer[];
+    if (way === "front") next = [...rest, ...moving];
+    else if (way === "back") next = [...moving, ...rest];
+    else {
+      next = [...list];
+      const step = way === "forward" ? 1 : -1;
+      const order = way === "forward" ? [...moving].reverse() : moving;
+      for (const layer of order) {
+        const at = next.findIndex((item) => item.id === layer.id);
+        const to = at + step;
+        if (to < 0 || to >= next.length || ids.has(next[to].id)) continue;
+        [next[at], next[to]] = [next[to], next[at]];
+      }
+    }
+    host.change(next, true);
+    draw();
+  }
+
+  /** The picked layers lined up on one of the selection's edges or its middle. */
+  function alignSelection(edge: PageEdge) {
+    const layers = picked();
+    const area = bounds(layers);
+    const { width, height } = size();
+    replaceMany(new Map(layers.map((layer) => {
+      const own = bounds([layer]);
+      const shift = edge === "left" ? area.x - own.x : edge === "right" ? area.x + area.w - (own.x + own.w) : edge === "center" ? area.x + area.w / 2 - (own.x + own.w / 2) : 0;
+      const drop = edge === "top" ? area.y - own.y : edge === "bottom" ? area.y + area.h - (own.y + own.h) : edge === "middle" ? area.y + area.h / 2 - (own.y + own.h / 2) : 0;
+      return [layer.id, { ...layer, x: layer.x + shift, y: layer.y + drop }];
+    })), true);
+    void width;
+    void height;
+    buildToolbar(find(selectedId));
+  }
+
+  /** Three or more layers spread so the gaps between them are equal, across or down. */
+  function distribute(axis: "x" | "y") {
+    const layers = picked();
+    if (layers.length < 3) return;
+    const spans = layers.map((layer) => ({ layer, box: bounds([layer]) })).sort((a, b) => (axis === "x" ? a.box.x - b.box.x : a.box.y - b.box.y));
+    const first = spans[0].box;
+    const last = spans[spans.length - 1].box;
+    const total = axis === "x" ? last.x + last.w - first.x : last.y + last.h - first.y;
+    const used = spans.reduce((sum, { box: each }) => sum + (axis === "x" ? each.w : each.h), 0);
+    const gap = (total - used) / (spans.length - 1);
+    let at = axis === "x" ? first.x : first.y;
+    const next = new Map<string, Layer>();
+    for (const { layer, box: each } of spans) {
+      const shift = at - (axis === "x" ? each.x : each.y);
+      next.set(layer.id, axis === "x" ? { ...layer, x: layer.x + shift } : { ...layer, y: layer.y + shift });
+      at += (axis === "x" ? each.w : each.h) + gap;
+    }
+    replaceMany(next, true);
+    buildToolbar(find(selectedId));
+  }
+
+  function copyStyle(layer: Layer) {
+    styleClip = Object.fromEntries(STYLE_KEYS.map((key) => [key, layer[key]])) as Partial<Layer>;
+  }
+
+  function pasteStyle() {
+    const style = styleClip;
+    if (!style) return;
+    updateAll(() => style);
   }
 
   /** A picture or video stretched over the whole page and sent to the back. */
@@ -579,15 +968,71 @@ export function createStage(host: StageHost): Stage {
     draw();
   }
 
-  function reorder(layer: Layer, step: number) {
-    const list = [...host.layers()];
-    const at = list.findIndex((item) => item.id === layer.id);
-    const to = Math.min(list.length - 1, Math.max(0, at + step));
-    if (to === at) return;
-    list.splice(to, 0, ...list.splice(at, 1));
-    host.change(list, true);
-    draw();
+  // The right-click menu: arrow keys move along it, Enter or a click runs an item, Escape or a click elsewhere closes it.
+  function closeMenu() {
+    if (menu.hidden) return;
+    menu.hidden = true;
+    menu.replaceChildren();
   }
+  function openMenu(clientX: number, clientY: number) {
+    closePop();
+    const layer = find(selectedId);
+    const items: Array<[string, string, () => void] | null> = [];
+    if (layer && picked().some((item) => item.locked)) {
+      items.push([labels.copy, ICONS.copy, copy], [labels.unlock, ICONS.unlock, () => lock(layer, false)]);
+    } else if (layer) {
+      items.push([labels.copy, ICONS.copy, copy]);
+      if (clipboard.length) items.push([labels.paste, ICONS.paste, paste]);
+      items.push([labels.duplicate, ICONS.duplicate, duplicate], [labels.remove, ICONS.trash, removeLayers], null);
+      items.push([labels.toFront, ICONS.forward, () => arrange("front")], [labels.forward, ICONS.forward, () => arrange("forward")], [labels.backward, ICONS.backward, () => arrange("backward")], [labels.toBack, ICONS.backward, () => arrange("back")], null);
+      if (multi()) items.push([labels.group, ICONS.group, group]);
+      if (picked().some((item) => item.group)) items.push([labels.ungroup, ICONS.ungroup, ungroup]);
+      items.push([layer.locked ? labels.unlock : labels.lock, layer.locked ? ICONS.unlock : ICONS.lock, () => lock(layer, !layer.locked)]);
+      if (!multi()) items.push([labels.copyStyle, ICONS.copyStyle, () => copyStyle(layer)]);
+      if (styleClip) items.push([labels.pasteStyle, ICONS.copyStyle, pasteStyle]);
+      if (!multi() && PICTURE_KINDS.has(layer.kind)) items.push([labels.setBackground, ICONS.background, () => setAsBackground(layer)]);
+    } else {
+      if (clipboard.length) items.push([labels.paste, ICONS.paste, paste]);
+      items.push([labels.selectAll, ICONS.select, () => selectMany(visible().map((item) => item.id))]);
+    }
+    menu.replaceChildren(...items.map((item) => {
+      if (!item) {
+        const rule = element("span", "ag-menu-rule");
+        rule.setAttribute("role", "separator");
+        return rule;
+      }
+      const [text, markup, run] = item;
+      const button = keyButton("ag-menu-item", text, markup);
+      button.setAttribute("role", "menuitem");
+      button.tabIndex = -1;
+      button.addEventListener("click", () => {
+        closeMenu();
+        run();
+        if (!document.activeElement || document.activeElement === document.body) overlay.focus({ preventScroll: true });
+      });
+      return button;
+    }));
+    menu.hidden = false;
+    const stage = host.stage.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(stage.width - menu.offsetWidth - 8, clientX - stage.left))}px`;
+    menu.style.top = `${Math.max(8, Math.min(stage.height - menu.offsetHeight - 8, clientY - stage.top))}px`;
+    menu.querySelector<HTMLElement>("[role=menuitem]")?.focus();
+  }
+  menu.addEventListener("keydown", (event) => {
+    const items = [...menu.querySelectorAll<HTMLElement>("[role=menuitem]")];
+    const at = items.indexOf(document.activeElement as HTMLElement);
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeMenu();
+      overlay.focus({ preventScroll: true });
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      items[(at + (event.key === "ArrowDown" ? 1 : -1) + items.length) % items.length]?.focus();
+    } else if (event.key === "Tab") closeMenu();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!menu.hidden && !menu.contains(event.target as Node)) closeMenu();
+  }, { signal: gone.signal });
 
   // Pop-overs from the bar: one at a time, focused when they open, closed by Escape, by pressing elsewhere, or by
   // focus leaving them.
@@ -595,6 +1040,10 @@ export function createStage(host: StageHost): Stage {
   let popFor: HTMLElement | null = null;
   let fontWatch: IntersectionObserver | null = null;
   function closePop() {
+    if (cropping) {
+      cropping = null;
+      box.removeAttribute("data-crop");
+    }
     fontWatch?.disconnect();
     fontWatch = null;
     pop.hidden = true;
@@ -624,8 +1073,9 @@ export function createStage(host: StageHost): Stage {
     if (key) toolbar.querySelector<HTMLElement>(`[data-key="${key}"]`)?.focus();
   };
   document.addEventListener("pointerdown", (event) => {
+    if (cropping && overlay.contains(event.target as Node)) return;
     if (!pop.hidden && !pop.contains(event.target as Node) && !(popFor?.contains(event.target as Node) ?? false)) closePop();
-  });
+  }, { signal: gone.signal });
   pop.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     event.stopPropagation();
@@ -635,6 +1085,7 @@ export function createStage(host: StageHost): Stage {
   });
   pop.addEventListener("focusout", (event) => {
     const next = event.relatedTarget as Node | null;
+    if (cropping && next === overlay) return;
     if (next && !pop.contains(next) && !(popFor?.contains(next) ?? false)) closePop();
   });
   toolbar.addEventListener("keydown", (event) => {
@@ -776,7 +1227,7 @@ export function createStage(host: StageHost): Stage {
   }
 
   /** A slider showing `value` times `scale` (a percent by default), up to `max`. */
-  function slider(name: string, value: number, apply: (value: number) => void, { max = 100, scale = 100, suffix = "%" } = {}) {
+  function slider(name: string, value: number, apply: (value: number) => void, { min = 0, max = 100, scale = 100, suffix = "%" } = {}) {
     const label = element("label", "ag-field");
     const head = element("span", "ag-field-head");
     const text = element("span", "ag-field-name");
@@ -785,7 +1236,7 @@ export function createStage(host: StageHost): Stage {
     head.append(text, shown);
     const input = element("input", "ag-slider");
     input.type = "range";
-    input.min = "0";
+    input.min = String(min);
     input.max = String(max);
     const show = () => {
       shown.textContent = `${input.value}${suffix}`;
@@ -799,6 +1250,7 @@ export function createStage(host: StageHost): Stage {
     });
     // A slider's drag is one step to undo, ended when it is let go.
     input.addEventListener("change", () => host.change(host.layers(), true));
+    input.dataset.popKey = name;
     label.append(head, input);
     return label;
   }
@@ -816,7 +1268,7 @@ export function createStage(host: StageHost): Stage {
       input.value = String(Math.round(value));
       input.addEventListener("change", () => {
         const number = Number(input.value);
-        if (Number.isFinite(number)) update(find(layer.id)!, apply(number));
+        if (Number.isFinite(number)) replaceLayer({ ...find(layer.id)!, ...apply(number) }, true);
       });
       label.append(text, input);
       return label;
@@ -831,56 +1283,79 @@ export function createStage(host: StageHost): Stage {
     return grid;
   }
 
-  function morePop(anchor: HTMLElement, layer: Layer) {
-    const actions = element("div", "ag-pop-actions");
-    // The pop-over takes its focus with it as it closes; the bar's More key, or the picture once the bar has gone, gets
-    // it back unless the action put it somewhere itself.
-    const settle = () => {
-      if (!document.activeElement || document.activeElement === document.body) (toolbar.querySelector<HTMLElement>('[data-key="more"]') ?? overlay).focus({ preventScroll: true });
-    };
-    const act = (text: string, markup: string, run: () => void) => {
-      const button = keyButton("", text, markup);
-      button.addEventListener("click", () => {
-        run();
-        closePop();
-        settle();
-      });
-      return button;
-    };
-    actions.append(
-      act(labels.forward, ICONS.forward, () => reorder(find(layer.id)!, 1)),
-      act(labels.backward, ICONS.backward, () => reorder(find(layer.id)!, -1)),
-      act(labels.duplicate, ICONS.duplicate, () => duplicate(find(layer.id)!)),
-      act(labels.copy, ICONS.copy, () => copy(find(layer.id)!)),
+  // The pop-over takes its focus with it as it closes; the key that opened it, or the picture once the bar has gone,
+  // gets it back unless the action put it somewhere itself.
+  const settle = (key: string) => {
+    if (!document.activeElement || document.activeElement === document.body) (toolbar.querySelector<HTMLElement>(`[data-key="${key}"]`) ?? overlay).focus({ preventScroll: true });
+  };
+  /** A key in a pop-over that runs an action and closes it. */
+  const act = (key: string, text: string, markup: string, run: () => void) => {
+    const button = keyButton("", text, markup);
+    button.dataset.popKey = text;
+    button.addEventListener("click", () => {
+      run();
+      closePop();
+      settle(key);
+    });
+    return button;
+  };
+
+  /** Arrange, align and, for one layer, its exact place, size and turn. */
+  function positionPop(anchor: HTMLElement, layer: Layer) {
+    const arrangeKeys = element("div", "ag-pop-actions ag-pop-pair");
+    arrangeKeys.append(
+      act("position", labels.forward, ICONS.forward, () => arrange("forward")),
+      act("position", labels.backward, ICONS.backward, () => arrange("backward")),
+      act("position", labels.toFront, ICONS.forward, () => arrange("front")),
+      act("position", labels.toBack, ICONS.backward, () => arrange("back")),
     );
-    if (clipboard) actions.append(act(labels.paste, ICONS.paste, paste));
-    actions.append(act(labels.lock, ICONS.lock, () => lock(find(layer.id)!, true)));
-    if (layer.rotation) actions.append(act(labels.straighten, ICONS.reset, () => update(find(layer.id)!, { rotation: 0 })));
-    const name = element("p", "ag-pop-name");
-    name.textContent = labels.alignPage;
     const edges = element("div", "ag-edge-grid");
     for (const [edge, markup] of EDGES) {
       const button = keyButton("", labels.edgeNames[edge], ICONS[markup]);
       button.addEventListener("click", () => {
-        const { width, height } = host.frameSize();
-        update(find(layer.id)!, alignToPage(find(layer.id)!, edge, width, height));
-        settle();
+        if (multi()) alignSelection(edge);
+        else {
+          const { width, height } = host.frameSize();
+          update(find(layer.id)!, alignToPage(find(layer.id)!, edge, width, height));
+        }
+        settle("position");
       });
       edges.append(button);
     }
-    const content: HTMLElement[] = [actions, name, edges, slider(labels.opacity, layer.opacity ?? 1, (value) => replaceLayer({ ...find(layer.id)!, opacity: value }, false))];
-    if (PICTURE_KINDS.has(layer.kind) || (layer.kind === "shape" && (!layer.shape || layer.shape === "rect"))) {
-      content.push(slider(labels.corners, (layer.radius ?? 0) * 2, (value) => replaceLayer({ ...find(layer.id)!, radius: value / 2 }, false)));
+    const content: HTMLElement[] = [popName(labels.arrange), arrangeKeys, popName(multi() ? labels.alignSelection : labels.alignPage), edges];
+    if (picked().length >= 3) {
+      const spread = element("div", "ag-pop-actions ag-pop-pair");
+      spread.append(act("position", labels.distributeAcross, ICONS.distributeX, () => distribute("x")), act("position", labels.distributeDown, ICONS.distributeY, () => distribute("y")));
+      content.push(popName(labels.distribute), spread);
     }
-    const heading = element("p", "ag-pop-name");
-    heading.textContent = labels.position;
-    content.push(heading, positionFields(layer));
-    openPop(anchor, labels.more, content);
+    if (!multi()) content.push(popName(labels.advanced), positionFields(layer));
+    openPop(anchor, labels.positionPanel, content);
+  }
+
+  /** Copying, locking, the look to copy, and what else a layer can do. */
+  function morePop(anchor: HTMLElement, layer: Layer) {
+    const actions = element("div", "ag-pop-actions");
+    actions.append(act("more", labels.duplicate, ICONS.duplicate, duplicate), act("more", labels.copy, ICONS.copy, copy));
+    if (clipboard.length) actions.append(act("more", labels.paste, ICONS.paste, paste));
+    if (multi()) actions.append(act("more", labels.group, ICONS.group, group));
+    if (picked().some((item) => item.group)) actions.append(act("more", labels.ungroup, ICONS.ungroup, ungroup));
+    if (!multi()) actions.append(act("more", labels.copyStyle, ICONS.copyStyle, () => copyStyle(find(layer.id)!)));
+    if (styleClip) actions.append(act("more", labels.pasteStyle, ICONS.copyStyle, pasteStyle));
+    actions.append(act("more", labels.lock, ICONS.lock, () => lock(find(layer.id)!, true)));
+    if (!multi() && layer.rotation) actions.append(act("more", labels.straighten, ICONS.reset, () => update(find(layer.id)!, { rotation: 0 })));
+    if (!multi() && PICTURE_KINDS.has(layer.kind)) actions.append(act("more", labels.setBackground, ICONS.background, () => setAsBackground(find(layer.id)!)));
+    openPop(anchor, labels.more, [actions]);
+  }
+
+  function transparencyPop(anchor: HTMLElement, layer: Layer) {
+    openPop(anchor, labels.transparency, [slider(labels.transparency, layer.opacity ?? 1, (value) => replaceMany(new Map(picked().map((item) => [item.id, { ...item, opacity: value }])), false))]);
   }
 
   function lock(layer: Layer, locked: boolean) {
-    update(layer, { locked });
-    if (locked) host.announce(labels.locked(host.layerName(layer)));
+    const all = multi() ? picked() : [layer];
+    replaceMany(new Map(all.map((item) => [item.id, { ...item, locked }])), true);
+    buildToolbar(find(selectedId));
+    if (locked) host.announce(labels.locked(all.length === 1 ? host.layerName(layer) : labels.selection(all.length)));
     focusKey(locked ? "unlock" : "more");
   }
 
@@ -901,53 +1376,185 @@ export function createStage(host: StageHost): Stage {
   /** The pop-over control that has focus, to find it again once the pop-over is rebuilt. */
   const popFocus = () => (pop.contains(document.activeElement) ? (document.activeElement as HTMLElement).dataset.popKey : undefined);
 
-  /** A row of colours with None first, for an effect that can be off. */
-  function effectColours(name: string, current: string | undefined, apply: (paint: string | undefined) => void) {
-    const row = element("div", "ag-swatch-row");
-    const none = element("button", "ag-swatch-key ag-swatch-none");
-    none.type = "button";
-    none.setAttribute("aria-label", `${name}: ${labels.none}`);
-    none.title = labels.none;
-    none.setAttribute("aria-pressed", String(!current));
-    none.dataset.popKey = `${name}: ${labels.none}`;
-    none.addEventListener("click", () => apply(undefined));
-    row.append(none);
-    const chosen = current?.toLowerCase();
-    PALETTE.forEach((color, index) => {
-      const key = swatch(color, `${name}: ${labels.paletteNames[index] ?? color}`, chosen === color, () => apply(color));
-      key.dataset.popKey = key.getAttribute("aria-label")!;
-      row.append(key);
-    });
-    return [popName(name), row];
-  }
-
-  /** Effects on words: a shadow, capitals, an outline and a colour behind them. */
+  /** A layer's look for words, one at a time: a shadow, a lift, hollow letters, a splice, an outline, an echo, a
+   *  glitch, neon or a colour behind; then the colour the look uses, a curve, and capitals. */
   function effectsPop(anchor: HTMLElement, layer: Layer, focus?: string) {
     const set = (change: Partial<Layer>) => {
       const kept = popFocus();
       update(find(layer.id)!, change);
       effectsPop(toolbar.querySelector<HTMLElement>('[data-key="effects"]') ?? anchor, find(layer.id)!, kept);
     };
-    const keys = element("div", "ag-pop-actions ag-pop-pair");
-    keys.append(
-      toggleKey(labels.shadow, ICONS.shadow, Boolean(layer.shadow), () => set({ shadow: !layer.shadow })),
-      toggleKey(labels.capitals, ICONS.capitals, Boolean(layer.uppercase), () => set({ uppercase: !layer.uppercase })),
+    const current = layer.shadow ? "shadow" : layer.outline ? "outline" : layer.background ? "background" : layer.effect ?? "none";
+    const clear: Partial<Layer> = { shadow: undefined, outline: undefined, background: undefined, effect: undefined };
+    const styles = element("div", "ag-chips");
+    for (const style of EFFECTS) {
+      const change: Partial<Layer> = style === "none" ? clear : style === "shadow" ? { ...clear, shadow: true } : style === "outline" ? { ...clear, outline: layer.outline ?? "#111111" } : style === "background" ? { ...clear, background: layer.background ?? "accent" } : { ...clear, effect: style };
+      const chip = toggleKey(labels.effectNames[style], ICONS.effects, current === style, () => set(change));
+      chip.classList.add("ag-chip");
+      styles.append(chip);
+    }
+    const content: HTMLElement[] = [popName(labels.effects), styles];
+    const tinted = current === "outline" ? "outline" : current === "background" ? "background" : current === "splice" ? "effectColor" : null;
+    if (tinted) {
+      const row = element("div", "ag-swatch-row");
+      const chosen = String(layer[tinted] ?? "").toLowerCase();
+      PALETTE.forEach((color, index) => {
+        const key = swatch(color, `${labels.effectColour}: ${labels.paletteNames[index] ?? color}`, chosen === color, () => set({ [tinted]: color }));
+        key.dataset.popKey = key.getAttribute("aria-label")!;
+        row.append(key);
+      });
+      content.push(popName(labels.effectColour), row);
+    }
+    if (TYPED_KINDS.has(layer.kind)) {
+      content.push(slider(labels.curve, (layer.curve ?? 0) / 100, (value) => replaceLayer({ ...find(layer.id)!, curve: Math.round(value * 100) || undefined }, false), { min: -100, max: 100, suffix: "" }));
+    }
+    const caps = toggleKey(labels.capitals, ICONS.capitals, Boolean(layer.uppercase), () => set({ uppercase: !layer.uppercase }));
+    content.push(caps);
+    openPop(anchor, labels.effects, content, focus);
+  }
+
+  /** The space between letters and between lines. */
+  function spacingPop(anchor: HTMLElement, layer: Layer) {
+    openPop(anchor, labels.spacing, [
+      slider(labels.letterSpacing, (layer.letterSpacing ?? 0) / 100, (value) => replaceLayer({ ...find(layer.id)!, letterSpacing: Math.round(value * 100) || undefined }, false), { min: -200, max: 800, scale: 100, suffix: "" }),
+      slider(labels.lineHeight, layer.lineHeight ?? 1.15, (value) => replaceLayer({ ...find(layer.id)!, lineHeight: value }, false), { min: 50, max: 250, scale: 100, suffix: "%" }),
+    ]);
+  }
+
+  const chipRow = <T extends string>(values: readonly T[], names: Record<T, string>, current: T, apply: (value: T) => void) => {
+    const row = element("div", "ag-chips");
+    for (const value of values) {
+      const chip = toggleKey(names[value], ICONS.check, current === value, () => apply(value));
+      chip.classList.add("ag-chip");
+      row.append(chip);
+    }
+    return row;
+  };
+
+  /** A shape's border: its weight, its dashes, its colour and, for a box, its corners. */
+  function borderPop(anchor: HTMLElement, layer: Layer, focus?: string) {
+    const set = (change: Partial<Layer>) => {
+      const kept = popFocus();
+      update(find(layer.id)!, change);
+      borderPop(toolbar.querySelector<HTMLElement>('[data-key="border"]') ?? anchor, find(layer.id)!, kept);
+    };
+    const content: HTMLElement[] = [
+      slider(labels.borderWeight, layer.strokeWidth ?? 0, (value) => replaceLayer({ ...find(layer.id)!, strokeWidth: value || undefined }, false), { max: 40, scale: 1, suffix: " px" }),
+      popName(labels.borderStyle),
+      chipRow(["solid", "dashed", "dotted"] as const, labels.dashNames, layer.dash ?? "solid", (dash) => set({ dash, strokeWidth: find(layer.id)!.strokeWidth || 6 })),
+    ];
+    const row = element("div", "ag-swatch-row");
+    const chosen = String(layer.stroke ?? "").toLowerCase();
+    PALETTE.forEach((color, index) => {
+      const key = swatch(color, `${labels.border}: ${labels.paletteNames[index] ?? color}`, chosen === color, () => set({ stroke: color, strokeWidth: find(layer.id)!.strokeWidth || 6 }));
+      key.dataset.popKey = key.getAttribute("aria-label")!;
+      row.append(key);
+    });
+    content.push(popName(labels.colour), row);
+    if (!layer.shape || layer.shape === "rect") content.push(slider(labels.corners, (layer.radius ?? 0) * 2, (value) => replaceLayer({ ...find(layer.id)!, radius: value / 2 }, false)));
+    openPop(anchor, labels.border, content, focus);
+  }
+
+  /** A line's weight and dashes, and an arrowhead at either end. */
+  function linePop(anchor: HTMLElement, layer: Layer, focus?: string) {
+    const set = (change: Partial<Layer>) => {
+      const kept = popFocus();
+      update(find(layer.id)!, change);
+      linePop(toolbar.querySelector<HTMLElement>('[data-key="line"]') ?? anchor, find(layer.id)!, kept);
+    };
+    const ends = element("div", "ag-pop-actions ag-pop-pair");
+    ends.append(
+      toggleKey(labels.arrowStart, ICONS.arrowLeft, Boolean(layer.arrowStart), () => set({ arrowStart: !layer.arrowStart })),
+      toggleKey(labels.arrowEnd, ICONS.arrowRight, Boolean(layer.arrowEnd), () => set({ arrowEnd: !layer.arrowEnd })),
     );
-    openPop(anchor, labels.effects, [keys, ...effectColours(labels.outline, layer.outline, (paint) => set({ outline: paint })), ...effectColours(labels.behind, layer.background, (paint) => set({ background: paint }))], focus);
+    openPop(anchor, labels.line, [
+      slider(labels.borderWeight, layer.strokeWidth ?? 8, (value) => replaceLayer({ ...find(layer.id)!, strokeWidth: Math.max(1, value) }, false), { max: 40, scale: 1, suffix: " px" }),
+      popName(labels.borderStyle),
+      chipRow(["solid", "dashed", "dotted"] as const, labels.dashNames, layer.dash ?? "solid", (dash) => set({ dash })),
+      ends,
+    ], focus);
+  }
+
+  /** Cropping: a zoom, and the picture dragged inside its box while this is open. */
+  function cropPop(anchor: HTMLElement, layer: Layer) {
+    const reset = keyButton("", labels.resetCrop, ICONS.reset);
+    reset.addEventListener("click", () => {
+      update(find(layer.id)!, { crop: undefined });
+      cropPop(toolbar.querySelector<HTMLElement>('[data-key="crop"]') ?? anchor, find(layer.id)!);
+    });
+    openPop(anchor, labels.crop, [slider(labels.zoom, layer.crop?.zoom ?? 1, (value) => {
+      const now = find(layer.id)!;
+      replaceLayer({ ...now, crop: { x: 0, y: 0, ...now.crop, zoom: Math.max(1, value) } }, false);
+    }, { min: 100, max: 400, scale: 100, suffix: "%" }), reset]);
+    // Opening the pop-over closes any other, which ends a crop, so the crop starts once it is open.
+    cropping = layer.id;
+    box.toggleAttribute("data-crop", true);
+  }
+
+  /** The shape a picture is cut to. */
+  function framePop(anchor: HTMLElement, layer: Layer) {
+    const shapes = element("div", "ag-chips");
+    for (const shape of FRAMES) {
+      const chip = toggleKey(labels.frameNames[shape], ICONS.check, (layer.mask ?? "none") === shape, () => {
+        update(find(layer.id)!, { mask: shape === "none" ? undefined : shape });
+        closePop();
+        focusKey("frame");
+      });
+      chip.classList.add("ag-chip");
+      shapes.append(chip);
+    }
+    openPop(anchor, labels.frame, [shapes]);
+  }
+
+  /** A ready-made look for a picture. */
+  function filtersPop(anchor: HTMLElement, layer: Layer) {
+    const looks = element("div", "ag-chips");
+    for (const name of ["original", ...Object.keys(FILTERS)]) {
+      const chip = toggleKey(name === "original" ? labels.original : labels.filterNames[name] ?? name, ICONS.check, (layer.filter ?? "original") === name, () => {
+        update(find(layer.id)!, { filter: name === "original" ? undefined : name });
+        closePop();
+        focusKey("filters");
+      });
+      chip.classList.add("ag-chip");
+      looks.append(chip);
+    }
+    openPop(anchor, labels.filters, [looks]);
   }
 
   /** How a layer comes in, and the stretch of the clip it shows for. */
   function animatePop(anchor: HTMLElement, layer: Layer, focus?: string) {
+    // With several layers picked, each change reaches all of them.
+    const live = (change: Partial<Layer>) => replaceMany(new Map(picked().map((item) => [item.id, { ...item, ...change }])), false);
     const set = (change: Partial<Layer>) => {
       const kept = popFocus();
-      update(find(layer.id)!, change);
+      updateAll(() => change);
       animatePop(toolbar.querySelector<HTMLElement>('[data-key="animate"]') ?? anchor, find(layer.id)!, kept);
     };
-    const ways = element("div", "ag-pop-actions ag-pop-pair");
-    ways.append(toggleKey(labels.none, ICONS.remove, !layer.enter, () => set({ enter: undefined })));
-    for (const way of ENTRANCES) {
-      if (way === "typewriter" && !TYPEWRITER_KINDS.has(layer.kind)) continue;
-      ways.append(toggleKey(labels.enterNames[way], ICONS.animate, layer.enter === way, () => set({ enter: way })));
+    const ways = (list: Entrance[], current: Entrance | undefined, field: "enter" | "exit") => {
+      const row = element("div", "ag-chips");
+      const none = toggleKey(labels.none, ICONS.remove, !current, () => set({ [field]: undefined }));
+      none.dataset.popKey = `${field}:none`;
+      none.classList.add("ag-chip");
+      row.append(none);
+      for (const way of list) {
+        if (way === "typewriter" && !TYPEWRITER_KINDS.has(layer.kind)) continue;
+        const chip = toggleKey(labels.enterNames[way], ICONS.animate, current === way, () => set({ [field]: way }));
+        chip.dataset.popKey = `${field}:${way}`;
+        chip.classList.add("ag-chip");
+        row.append(chip);
+      }
+      return row;
+    };
+    const loops = element("div", "ag-chips");
+    const still = toggleKey(labels.none, ICONS.remove, !layer.loop, () => set({ loop: undefined }));
+    still.dataset.popKey = "loop:none";
+    still.classList.add("ag-chip");
+    loops.append(still);
+    for (const loop of LOOPS) {
+      const chip = toggleKey(labels.loopNames[loop], ICONS.animate, layer.loop === loop, () => set({ loop }));
+      chip.dataset.popKey = `loop:${loop}`;
+      chip.classList.add("ag-chip");
+      loops.append(chip);
     }
     const times = element("div", "ag-position ag-times");
     const timeField = (name: string, field: "from" | "until") => {
@@ -968,7 +1575,7 @@ export function createStage(host: StageHost): Stage {
         const typed = input.value.trim();
         const seconds = typed ? parseTime(typed) : undefined;
         if (seconds !== undefined && !Number.isFinite(seconds)) return;
-        replaceLayer({ ...find(layer.id)!, [field]: seconds === undefined ? undefined : Math.max(0, seconds) }, false);
+        live({ [field]: seconds === undefined ? undefined : Math.max(0, seconds) });
       });
       input.addEventListener("change", () => host.change(host.layers(), true));
       const now = keyButton("", labels.playhead, ICONS.clock);
@@ -982,7 +1589,8 @@ export function createStage(host: StageHost): Stage {
     const whole = keyButton("", labels.wholeClip, ICONS.fit);
     whole.dataset.popKey = "whole";
     whole.addEventListener("click", () => set({ from: undefined, until: undefined }));
-    openPop(anchor, labels.animate, [popName(labels.animate), ways, popName(labels.timing), times, whole], focus);
+    const speed = slider(labels.speed, layer.speed ?? 1, (value) => live({ speed: value === 1 ? undefined : value }), { min: 25, max: 200, scale: 100, suffix: "%" });
+    openPop(anchor, labels.animate, [popName(labels.in), ways(ENTRANCES, layer.enter, "enter"), popName(labels.out), ways(EXITS, layer.exit, "exit"), popName(labels.loopName), loops, speed, popName(labels.timing), times, whole], focus);
   }
 
   function flipPop(anchor: HTMLElement, layer: Layer, focus?: string) {
@@ -1068,12 +1676,57 @@ export function createStage(host: StageHost): Stage {
       button.addEventListener("click", () => open(button, find(layer.id)!));
       return button;
     };
-    if (layer.locked) {
+    const iconKey = (key: string, text: string, markup: string, run: () => void, pressed?: boolean) => {
+      const button = keyed(iconButton("", text, markup), key);
+      button.title = text;
+      if (pressed !== undefined) button.setAttribute("aria-pressed", String(pressed));
+      button.addEventListener("click", run);
+      return button;
+    };
+    const tail = () => {
+      toolbar.append(
+        popKey("position", labels.positionPanel, ICONS.position, positionPop),
+        keyed(popIcon("transparency", labels.transparency, ICONS.transparency, transparencyPop), "transparency"),
+        popKey("more", labels.more, ICONS.more, morePop),
+        iconKey("remove", labels.remove, ICONS.trash, removeLayers),
+      );
+      nameKeys();
+      focusKey(active);
+    };
+    // On a narrow stage some keys show only their icons, so each keeps its name for screen readers and as a tooltip.
+    const nameKeys = () => {
+      for (const key of toolbar.querySelectorAll<HTMLElement>(".ag-key")) {
+        const text = key.querySelector(".ag-key-text")?.textContent ?? "";
+        if (!key.hasAttribute("aria-label") && text) key.setAttribute("aria-label", text);
+        if (!key.title) key.title = key.getAttribute("aria-label") ?? text;
+      }
+    };
+    const popIcon = (key: string, text: string, markup: string, open: (anchor: HTMLElement, layer: Layer) => void) => {
+      const button = keyed(iconButton("", text, markup), key);
+      button.title = text;
+      button.setAttribute("aria-haspopup", "dialog");
+      button.setAttribute("aria-expanded", "false");
+      button.setAttribute("aria-controls", pop.id);
+      button.addEventListener("click", () => open(button, find(layer.id)!));
+      return button;
+    };
+    if (layer.locked || picked().some((item) => item.locked)) {
       const unlock = keyed(keyButton("", labels.unlock, ICONS.unlock), "unlock");
       unlock.addEventListener("click", () => lock(find(layer.id)!, false));
       toolbar.append(unlock);
       focusKey(active);
       return;
+    }
+    if (multi()) {
+      // Several layers: what applies to all of them at once.
+      toolbar.setAttribute("aria-label", labels.options(labels.selection(picked().length)));
+      const name = element("span", "ag-size-name");
+      name.textContent = labels.selection(picked().length);
+      const together = picked().every((item) => item.group && item.group === picked()[0].group);
+      const groupKey = keyed(keyButton("", together ? labels.ungroup : labels.group, together ? ICONS.ungroup : ICONS.group), "group");
+      groupKey.addEventListener("click", () => (together ? ungroup() : group()));
+      toolbar.append(name, groupKey, popKey("animate", labels.animate, ICONS.animate, animatePop));
+      return tail();
     }
     if (TEXT_KINDS.has(layer.kind)) {
       const font = host.fonts().find((item) => item.family === layer.font);
@@ -1118,60 +1771,94 @@ export function createStage(host: StageHost): Stage {
       };
       const bold = glyph("bold", "B", labels.bold, strong, canBold, labels.boldMissing, () => update(find(layer.id)!, { weight: strong ? 400 : 700 }));
       const italic = glyph("italic", "I", labels.italic, Boolean(layer.italic), canItalic, labels.italicMissing, () => update(find(layer.id)!, { italic: !find(layer.id)!.italic }));
+      const underline = glyph("underline", "U", labels.underline, Boolean(layer.underline), true, "", () => update(find(layer.id)!, { underline: !find(layer.id)!.underline }));
+      underline.classList.add("ag-underline");
+      const strike = glyph("strike", "S", labels.strike, Boolean(layer.strike), true, "", () => update(find(layer.id)!, { strike: !find(layer.id)!.strike }));
+      strike.classList.add("ag-strike");
       const quiet = layer.kind === "handle" || layer.kind === "links" || layer.kind === "time";
       const colour = colourKey("colour", labels.colour, paintOf(layer.color, theme, quiet ? "muted" : "text"), (anchor) => colourPop(anchor, layer.color, quiet ? "muted" : "text", (paint) => update(find(layer.id)!, { color: paint })));
-      toolbar.append(fontKey, sizeGroup, bold, italic, colour);
+      toolbar.append(fontKey, sizeGroup, colour, bold, italic, underline, strike);
       if (layer.kind === "captions") {
         toolbar.append(colourKey("highlight", labels.highlight, paintOf(layer.highlight, theme, "accent"), (anchor) => colourPop(anchor, layer.highlight, "accent", (paint) => update(find(layer.id)!, { highlight: paint }))));
       }
       const order = ["left", "center", "right"] as const;
       const align = layer.align ?? "left";
-      const alignKey = keyed(keyButton("", labels.align, ALIGN_ICONS[align]), "align");
-      alignKey.setAttribute("aria-label", `${labels.align}: ${labels.alignNames[align]}`);
-      alignKey.addEventListener("click", () => update(find(layer.id)!, { align: order[(order.indexOf(align) + 1) % order.length] }));
-      toolbar.append(alignKey, popKey("effects", labels.effects, ICONS.effects, effectsPop));
-      if (TYPED_KINDS.has(layer.kind)) {
-        const edit = keyed(keyButton("", labels.editText, ICONS.text), "edit");
-        edit.addEventListener("click", () => editText(layer.id));
-        toolbar.append(edit);
+      const alignKey = iconKey("align", `${labels.align}: ${labels.alignNames[align]}`, ALIGN_ICONS[align], () => update(find(layer.id)!, { align: order[(order.indexOf(align) + 1) % order.length] }));
+      toolbar.append(alignKey);
+      if (layer.kind === "text") {
+        const lists = ["none", "bullet", "number"] as const;
+        const list = layer.list ?? "none";
+        toolbar.append(iconKey("list", `${labels.list}: ${labels.listNames[list]}`, list === "number" ? ICONS.listNumbers : ICONS.list, () => {
+          const next = lists[(lists.indexOf(list) + 1) % lists.length];
+          update(find(layer.id)!, { list: next === "none" ? undefined : next });
+        }, list !== "none"));
       }
-    } else if (layer.kind === "shape" || layer.kind === "visual") {
+      toolbar.append(popIcon("spacing", labels.spacing, ICONS.spacing, spacingPop), popKey("effects", labels.effects, ICONS.effects, effectsPop));
+    } else if (layer.kind === "shape" && layer.shape === "line") {
+      toolbar.append(colourKey("fill", labels.fill, paintOf(layer.fill, theme, "accent"), (anchor) => colourPop(anchor, layer.fill, "accent", (paint) => update(find(layer.id)!, { fill: paint }))), popKey("line", labels.line, ICONS.shapeLine, linePop));
+    } else if (layer.kind === "shape" || layer.kind === "visual" || layer.kind === "graphic") {
       const property = layer.kind === "shape" ? "fill" : "color";
-      toolbar.append(colourKey("fill", labels.fill, paintOf(layer[property], theme, "accent"), (anchor) => colourPop(anchor, layer[property], "accent", (paint) => update(find(layer.id)!, { [property]: paint } as Partial<Layer>))));
+      const fallback = layer.kind === "graphic" ? "text" : "accent";
+      const mono = layer.kind !== "graphic" || (layer.art?.paths.some((part) => part.fill === "currentColor" || part.stroke === "currentColor") ?? false);
+      if (mono) toolbar.append(colourKey("fill", labels.fill, paintOf(layer[property], theme, fallback), (anchor) => colourPop(anchor, layer[property], fallback, (paint) => update(find(layer.id)!, { [property]: paint } as Partial<Layer>))));
+      if (layer.kind === "shape") toolbar.append(popKey("border", labels.border, ICONS.border, borderPop));
       if (layer.kind === "visual") toolbar.append(popKey("style", labels.style, ICONS[layer.visual ?? "bars"], stylePop));
+      if (layer.kind === "graphic") toolbar.append(popKey("flip", labels.flip, ICONS.flip, flipPop));
     } else if (layer.kind === "image" || layer.kind === "avatar") {
       const swap = keyed(keyButton("", labels.replace, ICONS.photo), "replace");
       swap.addEventListener("click", () => host.replace(find(layer.id)!));
       toolbar.append(swap);
     }
     if (PICTURE_KINDS.has(layer.kind)) {
-      const background = keyed(keyButton("", labels.setBackground, ICONS.background), "background");
-      background.addEventListener("click", () => setAsBackground(find(layer.id)!));
-      toolbar.append(popKey("flip", labels.flip, ICONS.flip, flipPop), popKey("adjust", labels.adjust, ICONS.adjust, adjustPop), background);
+      if (layer.image) toolbar.append(popKey("crop", labels.crop, ICONS.crop, cropPop));
+      toolbar.append(popKey("frame", labels.frame, ICONS.frame, framePop), popKey("filters", labels.filters, ICONS.filters, filtersPop), popKey("adjust", labels.adjust, ICONS.adjust, adjustPop), popKey("flip", labels.flip, ICONS.flip, flipPop));
     }
     toolbar.append(popKey("animate", labels.animate, ICONS.animate, animatePop));
-    const more = keyed(keyButton("ag-more-key", labels.more, ICONS.more), "more");
-    more.setAttribute("aria-haspopup", "dialog");
-    more.setAttribute("aria-expanded", "false");
-    more.setAttribute("aria-controls", pop.id);
-    more.addEventListener("click", () => morePop(more, find(layer.id)!));
-    const remove = keyed(keyButton("ag-remove-key", labels.remove, ICONS.trash), "remove");
-    remove.addEventListener("click", () => removeLayer(find(layer.id)!));
-    toolbar.append(more, remove);
-    focusKey(active);
+    tail();
   }
 
+  /** Picks one layer, with the rest of its group. */
   function select(id: string | null) {
     if (editing && id !== editing) finishTyping(false);
-    const changed = id !== selectedId;
+    const layer = find(id);
+    const group = layer?.group ? host.layers().filter((item) => item.group === layer.group && item.id !== layer.id && !item.hidden).map((item) => item.id) : [];
+    const changed = id !== selectedId || group.join() !== others.join();
     selectedId = id;
+    others = group;
     hover.hidden = true;
+    if (!id || changed) {
+      cropping = null;
+      box.removeAttribute("data-crop");
+    }
     if (changed) {
-      const layer = find(id);
       buildToolbar(layer);
-      if (layer) host.announce(labels.selected(host.layerName(layer)));
+      if (layer) host.announce(group.length ? labels.selection(group.length + 1) : labels.selected(host.layerName(layer)));
     }
     draw();
+  }
+
+  /** Picks several layers at once, the last of them leading. */
+  function selectMany(ids: string[]) {
+    const unique = [...new Set(ids)].filter((id) => find(id));
+    if (unique.length <= 1) return select(unique[0] ?? null);
+    if (editing) finishTyping(false);
+    selectedId = unique[unique.length - 1];
+    others = unique.slice(0, -1);
+    cropping = null;
+    box.removeAttribute("data-crop");
+    buildToolbar(find(selectedId));
+    host.announce(labels.selection(unique.length));
+    draw();
+  }
+
+  /** Adds a layer and its group to the selection, or takes them out. */
+  function toggle(id: string) {
+    const layer = find(id);
+    if (!layer) return;
+    const group = layer.group ? host.layers().filter((item) => item.group === layer.group && !item.hidden).map((item) => item.id) : [id];
+    const now = picked().map((item) => item.id);
+    const has = now.includes(id);
+    selectMany(has ? now.filter((item) => !group.includes(item)) : [...now, ...group.filter((item) => item !== id), id]);
   }
 
   new ResizeObserver(draw).observe(host.stage);
@@ -1183,8 +1870,10 @@ export function createStage(host: StageHost): Stage {
     select,
     refresh() {
       const layer = find(selectedId);
+      others = others.filter((id) => find(id) && !find(id)!.hidden);
       if (selectedId && (!layer || layer.hidden)) {
         selectedId = null;
+        others = [];
         buildToolbar(null);
       } else if (layer && !gesture && !changing && JSON.stringify(layer) !== toolbarFor) {
         // Changed from elsewhere, as by undo: the bar, and any pop-over showing the layer as it was, are built again.
@@ -1195,6 +1884,9 @@ export function createStage(host: StageHost): Stage {
     editText,
     focus() {
       overlay.focus({ preventScroll: true });
+    },
+    destroy() {
+      gone.abort();
     },
   };
 }

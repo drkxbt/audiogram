@@ -6,15 +6,27 @@ Make a clip on [drk.vc](https://drk.vc/repo?id=audiogram#preview), nothing to in
 
 ![A MacBook and an iPhone running the clip maker in Safari: on the MacBook, a sample Space plays with green bars moving to the voice and the caption lighting up word by word, then the visual changes to a wave, the colours to mint and the shape to tall, and the captions are timed by tapping the picture; on the iPhone, the clip plays in the tall shape, is shortened from its end, and changes to the pulse visual and dusk colours](demo/preview.webp)
 
-Audiogram apps such as Headliner charge a monthly plan for unlimited clips without a watermark. This one is MIT licensed: use it in a product, change it, ship it.
+It is MIT licensed, with no plan to pay for and no watermark: use it in a product, change it, ship it.
 
 - **Recordings of any length, clips of any length.** An MP3 or a WAV is read a stretch at a time instead of decoded whole, so a three-hour Space opens in a moment, with how far it has got shown as a percent, and its waveform fills in as it is read. A recording opens fully selected and plays from end to end; the clip can be all of it or any stretch of it. The preview holds a minute of sound around the playhead and the export works twenty seconds at a time, so a clip's length is bounded by the disk, not memory.
 - **Pick the moment.** The whole recording is drawn as a waveform. Drag the clip's edges, slide it along, or drag across the rest of the waveform for a new stretch. The playhead has a strip of its own above it: drag it and the picture follows. Zoom in to pick seconds out of hours; an overview of the whole recording shows where you are.
 - **Captions, word by word.** The word being said is marked as it is said, said words turn bright and the rest wait in grey. Long lines break into pages that fit the shape of the video.
 - **Timing without a transcript service.** Paste a transcript and it is spread over the clip by how long each line takes to say; then tap the picture as each line starts and the captions snap to your taps. SRT and WebVTT files open, and the clip's captions save as SRT.
 - **Named tools.** Design, Text, Photos, Music and Captions each have a labelled tab, down the left, or in a row under the timeline on a phone. One panel is open at a time, so no panel needs scrolling. Open audio and Download are at the top.
-- **Edit the picture freely.** Every part of the frame is a layer. Press one to select it, drag it (it snaps to the middle, the edges and the other parts), pull a handle to size it or the round one to turn it, and double-click words to type them. The bar above the picture sets the font, size, weight, colour and alignment; text effects (a shadow, an outline, a colour behind the words, capitals); a picture's flip, brightness, contrast, colour and blur; how a part comes in (fade, rise, pop, slide or typewriter) and the stretch of the clip it shows for. More aligns it to the page, locks it, copies, pastes, duplicates or deletes it, and brings it forward or back. Undo or redo any step; each shape keeps a layout of its own.
-- **Start from a blank page.** Start from an empty page, the audiogram card or a page led by big captions, and give the page any colour or gradient. Elements adds the clip's own parts one at a time (captions, sound bars, a wave or a pulse, the clip's time, the profile picture, name, handle, title and links), ten shapes and emoji stickers. Upload photos and videos; a video plays muted in its layer, loops, and can be set as the background.
+- **Edit the picture freely.** Every part of the frame is a layer. Press one to select it, drag it (it snaps to the middle, the edges and the other parts), pull a handle to size it or the round one to turn it, and double-click words to type them. Shift-click or drag a box on the page to pick several, then move, align, spread, group or delete them together; right-click for the same actions in a menu.
+- **A bar for whatever is picked.**
+  - Words: font, size, colour, bold, italic, underline, strikethrough, alignment, lists, letter and line spacing, and effects (shadow, lift, hollow, splice, outline, echo, glitch, neon, a colour behind, a curve, capitals).
+  - Shapes: a border, solid, dashed or dotted.
+  - Lines: arrowheads.
+  - Pictures and videos: crop by dragging inside the box, a frame shape, filters, brightness, contrast, colour and blur, flips, and Set as background.
+  - Every part: how it comes in, goes and moves while it shows (fade, rise, pan, pop, wipe, blur, zoom, breathe, baseline, drift, tumble, stomp, bounce, flicker, typewriter; pulse, wiggle, spin, float), at what speed and for which stretch of the clip. Position arranges, aligns and sets the exact place and size; transparency, copy style, lock and duplicate are a press away. Undo or redo any step; each shape keeps a layout of its own.
+- **Start from a blank page.** Start from an empty page, the audiogram card, a page led by big captions, or any design a page passes in, and give the page any colour or gradient.
+  - Elements adds the clip's own parts one at a time (captions, sound bars, a wave or a pulse, the clip's time, the profile picture, name, handle, title and links), sixteen shapes, lines and arrows, photo frames and grids, and any graphics and stickers a page offers, with a search.
+  - Text adds headings and pairs of fonts that go together.
+  - Photos takes your photos and videos and any free photos a page offers.
+  - A video plays muted in its layer, loops, and can be set as the background.
+- **Timing and zoom.** Each layer's stretch of the clip is a bar in the Layers panel to drag. The picture zooms from the corner, with Ctrl and the wheel, or with Ctrl and plus or minus.
+- **Downloads.** An MP4 at full size or two thirds of it, at 24, 30 or 60 frames a second, or a PNG of the moment at the playhead.
 - **A look of your own.** Square, 4:5, 9:16 or 16:9. Bars that follow the voice's pitches, a scrolling wave, or rings that pulse. Five colour themes, your picture, name, handle and a title, the clip's time by the visual, and up to three links along the bottom.
 - **An MP4 in seconds.** Where the browser has WebCodecs with H.264 and AAC, as Chrome and Edge do, the video is made faster than it plays, frame by frame, and written to an MP4 by a muxer in this package. Elsewhere it is recorded as it plays.
 - **Private.** Nothing is uploaded: the audio is decoded, drawn and encoded in the page.
@@ -67,6 +79,8 @@ Give the container a height; the editor fills it. Without `onExport`, the finish
 | `maxLength` | none | The longest clip, in seconds. |
 | `blank` | `false` | Start from an empty white page rather than the audiogram card; layouts given in `layers` still apply. |
 | `page` | the theme's | The page's colour, `{ color }`, or a gradient, `{ color, to, angle }`; `null` for the theme's. |
+| `templates` | | More designs to start from: `{ id, name, make(shape) }`, where `make` returns `{ layers, page, theme? }`. |
+| `library` | | Graphics, stickers and photos for the panels: `{ graphics, stickers, photos }`. A graphic or sticker is `{ id, set, name, tags, art }`, where `art` is `{ w, h, paths: [{ d, fill, stroke, width, rule }] }` and `currentColor` takes the layer's colour; a photo is `{ id, name, url, thumb, width, height, credit }`. |
 | `font` | Geist, then the system font | The video's font, as a canvas font family. |
 | `labels` | English | Every name and message, for other languages. |
 | `music` | | Music under the voice, an address or a `Blob` of any audio the browser can decode. It loops, comes in over a second and leaves over a second and a half, and the mix is kept from clipping. The visual follows the voice alone. |
@@ -94,7 +108,13 @@ The parts work without the editor too. `defaultLayers(shape)` gives the classic 
 | Arrows in the tools | Move between Design, Elements, Text, Photos, Music and Captions |
 | Arrows on the picture | Move the selected part a pixel; with Shift, ten |
 | Enter, Delete, Escape on the picture | Type into the selected words, delete the part, let it go |
-| Ctrl or Cmd with D, C, X, V | Duplicate, copy, cut or paste the selected part |
+| Ctrl or Cmd with D, C, X, V | Duplicate, copy, cut or paste the selected parts |
+| Ctrl or Cmd with A, G, Shift+G | Select every part, group the selected parts, take a group apart |
+| Ctrl or Cmd with ] or [, with Shift | Bring forward or send backward; with Shift, to the front or the back |
+| Ctrl or Cmd with B, I, U on words | Bold, italic, underline |
+| T, R, C, L on the picture | Add text, a square, a circle or a line |
+| Alt+Shift+L | Lock or unlock the selected parts |
+| Ctrl or Cmd with plus, minus, 0 | Zoom in, zoom out, fit the page |
 | Ctrl or Cmd with Z, with Shift (or Y) | Undo, redo |
 | Arrows in a choice | Move along it and choose |
 

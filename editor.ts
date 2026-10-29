@@ -1,12 +1,12 @@
 import { clip, cueAt, formatTime, markStart, paginate, parseSubtitles, spread, toSRT, type Cue } from "./captions.js";
 import { exportClip, type ExportResult } from "./export.js";
 import { clipTimeAt, partsLength, readClip, stitchCues } from "./parts.js";
-import { TEMPLATES, templateOf, type TemplateId } from "./templates.js";
+import { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
 import { Painter, SIZES, THEMES, type Layout, type Overlay, type Page, type Scene, type Theme, type Visual } from "./render.js";
 import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
 import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
 import { initialView, outlineBars, panView, showSpan, zoomView, type View } from "./view.js";
-import { defaultLayers, moveLayer, type Layer, type LayerKind } from "./layers.js";
+import { defaultLayers, moveLayer, type Art, type Layer, type LayerKind, type ShapeKind } from "./layers.js";
 import { createStage, type FontChoice, type StageLabels } from "./stage.js";
 import { textHeight } from "./render.js";
 
@@ -97,9 +97,33 @@ export interface Labels {
   gradientNames: string[];
   themePage: string;
   shapes: string;
-  shapeNames: { square: string; rounded: string; circle: string; line: string; triangle: string; diamond: string; star: string; heart: string; arrow: string; bubble: string };
+  shapeNames: { square: string; rounded: string; circle: string; line: string; triangle: string; diamond: string; star: string; heart: string; arrow: string; bubble: string; pentagon: string; hexagon: string; octagon: string; cross: string; parallelogram: string; arch: string };
   stickers: string;
   addSticker: (sticker: string) => string;
+  searchElements: string;
+  graphics: string;
+  lines: string;
+  lineNames: { line: string; dashed: string; arrow: string; double: string };
+  frames: string;
+  grids: string;
+  gridNames: { across: string; down: string; three: string; four: string };
+  showMore: string;
+  nothingFound: string;
+  addGraphic: (name: string) => string;
+  fontCombos: string;
+  details: string;
+  stockPhotos: string;
+  searchPhotos: string;
+  photoBy: (name: string, credit: string) => string;
+  moreTemplates: string;
+  useTemplate: (name: string) => string;
+  downloadPanel: string;
+  fileType: string;
+  videoFile: string;
+  pictureFile: string;
+  quality: string;
+  frameRate: string;
+  downloadNow: string;
   soundAndCaptions: string;
   elementNames: { captions: string; bars: string; wave: string; pulse: string; time: string; avatar: string; name: string; handle: string; title: string; links: string };
   addText: string;
@@ -114,11 +138,48 @@ export interface Labels {
   pictureTooBig: string;
   videoTooBig: string;
   layersHelp: string;
-  layerNames: Record<"avatar" | "name" | "handle" | "title" | "visual" | "time" | "captions" | "links" | "image" | "video" | "shape", string>;
+  fitPage: string;
+  zoomLevel: (percent: number) => string;
+  layerNames: Record<"avatar" | "name" | "handle" | "title" | "visual" | "time" | "captions" | "links" | "image" | "video" | "shape" | "graphic", string>;
   textLayer: (words: string) => string;
   showLayer: (name: string) => string;
   hideLayer: (name: string) => string;
   selectLayer: (name: string) => string;
+}
+
+/** A design to start from, laid out for any shape, from the page using the editor. */
+export interface TemplateChoice {
+  id: string;
+  name: string;
+  make(layout: Layout): Template;
+}
+
+/** A drawing in a library of graphics or stickers. */
+export interface LibraryItem {
+  id: string;
+  set: string;
+  name: string;
+  tags?: string;
+  art: Art;
+}
+
+/** A photo the page offers, by address, with its small version for the panel. */
+export interface StockPhoto {
+  id: string;
+  name: string;
+  theme?: string;
+  url: string;
+  thumb: string;
+  width: number;
+  height: number;
+  credit?: string;
+}
+
+/** Graphics, stickers and photos a page offers for the picture. */
+export interface Library {
+  graphics?: LibraryItem[];
+  stickers?: LibraryItem[];
+  photos?: StockPhoto[];
 }
 
 export interface EditorOptions {
@@ -151,6 +212,10 @@ export interface EditorOptions {
   blank?: boolean;
   /** The page's own colour or gradient; the theme's when left out. */
   page?: Page | null;
+  /** More designs to start from, after the editor's own. */
+  templates?: TemplateChoice[];
+  /** Graphics, stickers and photos to offer in the panels. */
+  library?: Library;
   font?: string;
   labels?: Partial<Labels>;
   /** Called with the finished video. Without it, the video downloads. */
@@ -226,6 +291,10 @@ export interface Editor {
   setFonts(fonts: FontChoice[]): void;
   /** Uploaded pictures by key, for a page that keeps them somewhere slower to read than the options. */
   setImages(images: Record<string, Blob | string>): Promise<void>;
+  /** Designs to start from, for a page that loads them after the editor opens. */
+  setTemplates(templates: TemplateChoice[]): void;
+  /** Graphics, stickers and photos, for a page that loads them after the editor opens. */
+  setLibrary(library: Library): void;
   destroy(): void;
 }
 
@@ -355,7 +424,7 @@ const DEFAULT_LABELS: Labels = {
     capitals: "Capitals",
     none: "None",
     animate: "Animate",
-    enterNames: { fade: "Fade in", rise: "Rise", pop: "Pop", slide: "Slide in", typewriter: "Typewriter" },
+    enterNames: { fade: "Fade", rise: "Rise", pan: "Pan", slide: "Slide", pop: "Pop", wipe: "Wipe", blur: "Blur", zoom: "Zoom", breathe: "Breathe", baseline: "Baseline", drift: "Drift", tumble: "Tumble", stomp: "Stomp", bounce: "Bounce", flicker: "Flicker", typewriter: "Typewriter" },
     timing: "Shown",
     showFrom: "From",
     showUntil: "Until",
@@ -382,6 +451,54 @@ const DEFAULT_LABELS: Labels = {
     copied: (layer) => `${layer} copied`,
     style: "Style",
     visualNames: { bars: "Bars", wave: "Wave", pulse: "Pulse" },
+    underline: "Underline",
+    strike: "Strikethrough",
+    list: "List",
+    listNames: { none: "none", bullet: "bullets", number: "numbers" },
+    spacing: "Spacing",
+    letterSpacing: "Letter spacing",
+    lineHeight: "Line spacing",
+    curve: "Curve",
+    effectNames: { none: "None", shadow: "Shadow", lift: "Lift", hollow: "Hollow", splice: "Splice", outline: "Outline", echo: "Echo", glitch: "Glitch", neon: "Neon", background: "Background" },
+    effectColour: "Effect colour",
+    transparency: "Transparency",
+    positionPanel: "Position",
+    arrange: "Arrange",
+    toFront: "To front",
+    toBack: "To back",
+    advanced: "Exact place and size",
+    alignSelection: "Align the selection",
+    distribute: "Spread evenly",
+    distributeAcross: "Across",
+    distributeDown: "Down",
+    group: "Group",
+    ungroup: "Ungroup",
+    selectAll: "Select all",
+    copyStyle: "Copy style",
+    pasteStyle: "Paste style",
+    border: "Border",
+    borderWeight: "Weight",
+    borderStyle: "Style",
+    dashNames: { solid: "Solid", dashed: "Dashed", dotted: "Dotted" },
+    line: "Line",
+    arrowStart: "Arrow at start",
+    arrowEnd: "Arrow at end",
+    crop: "Crop",
+    zoom: "Zoom",
+    resetCrop: "Reset crop",
+    frame: "Frame",
+    frameNames: { none: "None", rect: "Square", ellipse: "Circle", triangle: "Triangle", star: "Star", heart: "Heart", arrow: "Arrow", diamond: "Diamond", bubble: "Speech", pentagon: "Pentagon", hexagon: "Hexagon", octagon: "Octagon", cross: "Cross", parallelogram: "Slant", arch: "Arch", line: "Line" },
+    filters: "Filters",
+    filterNames: { vivid: "Vivid", warm: "Warm", cool: "Cool", fade: "Faded", retro: "Retro", dramatic: "Dramatic", mono: "Mono", noir: "Noir" },
+    original: "Original",
+    in: "Way in",
+    out: "Way out",
+    loopName: "While it shows",
+    loopNames: { pulse: "Pulse", wiggle: "Wiggle", rotate: "Spin", float: "Float" },
+    speed: "Speed",
+    selection: (count) => `${count} parts`,
+    grouped: (count) => `${count} parts grouped`,
+    ungrouped: "Group taken apart",
   },
   undo: "Undo",
   redo: "Redo",
@@ -392,9 +509,33 @@ const DEFAULT_LABELS: Labels = {
   gradientNames: ["Sunrise", "Lagoon", "Deep sea", "Lime", "Peach", "Dusk"],
   themePage: "The theme's colours",
   shapes: "Shapes",
-  shapeNames: { square: "Square", rounded: "Rounded", circle: "Circle", line: "Line", triangle: "Triangle", diamond: "Diamond", star: "Star", heart: "Heart", arrow: "Arrow", bubble: "Speech" },
+  shapeNames: { square: "Square", rounded: "Rounded", circle: "Circle", line: "Bar", triangle: "Triangle", diamond: "Diamond", star: "Star", heart: "Heart", arrow: "Arrow", bubble: "Speech", pentagon: "Pentagon", hexagon: "Hexagon", octagon: "Octagon", cross: "Cross", parallelogram: "Slant", arch: "Arch" },
   stickers: "Stickers",
   addSticker: (sticker) => `Add ${sticker}`,
+  searchElements: "Search graphics and stickers",
+  graphics: "Graphics",
+  lines: "Lines",
+  lineNames: { line: "Line", dashed: "Dashed", arrow: "Arrow", double: "Both ends" },
+  frames: "Photo frames",
+  grids: "Photo grids",
+  gridNames: { across: "Two across", down: "Two down", three: "Three across", four: "Four" },
+  showMore: "Show more",
+  nothingFound: "Nothing matches that. Try a shorter word.",
+  addGraphic: (name) => `Add ${name}`,
+  fontCombos: "Font pairs",
+  details: "The show and the speaker",
+  stockPhotos: "Free photos",
+  searchPhotos: "Search photos",
+  photoBy: (name, credit) => (credit ? `${name}, by ${credit}` : name),
+  moreTemplates: "Podcast designs",
+  useTemplate: (name) => `Start from ${name}`,
+  downloadPanel: "Download",
+  fileType: "File type",
+  videoFile: "Video (MP4)",
+  pictureFile: "Picture of this moment (PNG)",
+  quality: "Quality",
+  frameRate: "Frames a second",
+  downloadNow: "Download",
   soundAndCaptions: "Sound and captions",
   elementNames: { captions: "Captions", bars: "Sound bars", wave: "Sound wave", pulse: "Pulse", time: "Clip time", avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", links: "Links" },
   addText: "Add text",
@@ -408,8 +549,10 @@ const DEFAULT_LABELS: Labels = {
   forgetPicture: "Remove from your pictures",
   pictureTooBig: "That picture is over 20 MB. Try a smaller one.",
   videoTooBig: "That video is over 200 MB. Try a shorter one.",
+  fitPage: "Fit the page",
+  zoomLevel: (percent) => `Zoom ${percent}%`,
   layersHelp: "Top of the picture first. Press a name to select it; hidden parts can be shown again here.",
-  layerNames: { avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", visual: "Animation", time: "Clip time", captions: "Captions", links: "Links", image: "Picture", video: "Video", shape: "Shape" },
+  layerNames: { avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", visual: "Animation", time: "Clip time", captions: "Captions", links: "Links", image: "Picture", video: "Video", shape: "Shape", graphic: "Graphic" },
   textLayer: (words) => `Text: ${words}`,
   showLayer: (name) => `Show ${name}`,
   hideLayer: (name) => `Hide ${name}`,
@@ -549,6 +692,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const pictures = new Map<string, { source: Blob | string; image: HTMLImageElement | null; video: HTMLVideoElement | null; url: string | null; listed: boolean }>();
   let editingLayer: string | null = null;
   let fontList: FontChoice[] = options.fonts ?? [];
+  let hostTemplates: TemplateChoice[] = options.templates ?? [];
+  let library: Library = options.library ?? {};
   const fontsAdded = new Set<string>();
   // The range given with the options belongs to the first recording; another one opens at its own start.
   let firstLoad = true;
@@ -575,6 +720,15 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const undoButton = keyButton("ag-undo", labels.undo, ICONS.undo);
   const redoButton = keyButton("ag-redo", labels.redo, ICONS.redo);
   header.append(openButton, audioInput, headerSlot, element("span", "ag-grow"), undoButton, redoButton, actionsSlot, exportButton);
+  exportButton.setAttribute("aria-haspopup", "dialog");
+  exportButton.setAttribute("aria-expanded", "false");
+  // Download: what to make and how, then the key that makes it. The choices stay for the next download.
+  const download = element("div", "ag-download");
+  download.setAttribute("role", "dialog");
+  download.setAttribute("aria-label", labels.downloadPanel);
+  download.hidden = true;
+  let downloadChoice: { kind: "video" | "picture"; scale: number; fps: number } = { kind: "video", scale: 1, fps: 30 };
+  header.append(download);
 
   const body = element("div", "ag-body");
   const rail = element("div", "ag-rail");
@@ -638,7 +792,19 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   importName.textContent = labels.importing;
   const importPercent = element("span", "ag-import-percent");
   importCard.append(importName, importPercent, element("span", "ag-import-bar"));
-  stageArea.append(preview, tapHint, emptyNote, notice, importCard);
+  // The picture sits in a scroller of its own, so it can be zoomed past the stage's size and moved around.
+  const scroller = element("div", "ag-scroll");
+  scroller.append(preview);
+  const zoomBar = element("div", "ag-zoom-bar");
+  const zoomOut = iconButton("", labels.zoomOut, ICONS.minus);
+  const zoomLevel = element("button", "ag-zoom-level");
+  zoomLevel.type = "button";
+  zoomLevel.title = labels.fitPage;
+  const zoomIn = iconButton("", labels.zoomIn, ICONS.add);
+  zoomOut.title = labels.zoomOut;
+  zoomIn.title = labels.zoomIn;
+  zoomBar.append(zoomOut, zoomLevel, zoomIn);
+  stageArea.append(scroller, tapHint, emptyNote, notice, importCard, zoomBar);
   body.append(rail, drawer, stageArea);
 
   const heading = (pane: HTMLElement, text: string) => {
@@ -704,6 +870,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   tiles(panes.design, labels.shape, (["square", "portrait", "story", "landscape"] as Layout[]).map((value) => ({ value, text: labels.layouts[value], detail: RATIOS[value], markup: ICONS[value] })), layout, (value) => {
     layout = value as Layout;
     rebuild();
+    applyZoom(zoom);
+    renderTemplates();
     changed();
   });
   tiles(panes.design, labels.visual, (["bars", "wave", "pulse"] as Visual[]).map((value) => ({ value, text: labels.visuals[value], markup: ICONS[value] })), visual, (value) => {
@@ -738,10 +906,19 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     templateTiles.append(tile);
   }
   panes.design.append(templateTiles);
+  const moreHeading = heading(panes.design, labels.moreTemplates);
+  const templateGrid = element("div", "ag-template-grid");
+  panes.design.append(templateGrid);
   heading(panes.design, labels.pageColour);
   const pageSwatches = element("div", "ag-page-swatches");
   panes.design.append(pageSwatches);
 
+  const elementSearch = element("input", "ag-input ag-search");
+  elementSearch.type = "search";
+  elementSearch.placeholder = labels.searchElements;
+  elementSearch.setAttribute("aria-label", labels.searchElements);
+  elementSearch.autocomplete = "off";
+  panes.elements.append(elementSearch);
   heading(panes.elements, labels.soundAndCaptions);
   const soundTiles = element("div", "ag-tiles");
   soundTiles.style.setProperty("--ag-count", "4");
@@ -781,6 +958,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     { name: labels.shapeNames.heart, markup: ICONS.shapeHeart, make: (): Partial<Layer> => ({ shape: "heart" }) },
     { name: labels.shapeNames.arrow, markup: ICONS.shapeArrow, make: (): Partial<Layer> => ({ shape: "arrow", wide: true } as Partial<Layer>) },
     { name: labels.shapeNames.bubble, markup: ICONS.shapeBubble, make: (): Partial<Layer> => ({ shape: "bubble", wide: true } as Partial<Layer>) },
+    { name: labels.shapeNames.pentagon, markup: ICONS.shapePentagon, make: (): Partial<Layer> => ({ shape: "pentagon" }) },
+    { name: labels.shapeNames.hexagon, markup: ICONS.shapeHexagon, make: (): Partial<Layer> => ({ shape: "hexagon" }) },
+    { name: labels.shapeNames.octagon, markup: ICONS.shapeOctagon, make: (): Partial<Layer> => ({ shape: "octagon" }) },
+    { name: labels.shapeNames.cross, markup: ICONS.shapeCross, make: (): Partial<Layer> => ({ shape: "cross" }) },
+    { name: labels.shapeNames.parallelogram, markup: ICONS.shapeSlant, make: (): Partial<Layer> => ({ shape: "parallelogram", wide: true } as Partial<Layer>) },
+    { name: labels.shapeNames.arch, markup: ICONS.shapeArch, make: (): Partial<Layer> => ({ shape: "arch" }) },
     { name: labels.shapeNames.line, markup: ICONS.shapeLine, make: (): Partial<Layer> => ({ shape: "rect", radius: 0.5, line: true } as Partial<Layer>) },
   ];
   for (const kind of shapeKinds) {
@@ -794,17 +977,65 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }
   panes.elements.append(shapeTiles);
 
-  heading(panes.elements, labels.stickers);
-  const stickerGrid = element("div", "ag-stickers");
-  for (const sticker of STICKERS) {
-    const button = element("button", "ag-sticker");
-    button.type = "button";
-    button.textContent = sticker;
-    button.setAttribute("aria-label", labels.addSticker(sticker));
-    button.addEventListener("click", () => addSticker(sticker));
-    stickerGrid.append(button);
+  heading(panes.elements, labels.lines);
+  const lineTiles = element("div", "ag-tiles");
+  lineTiles.style.setProperty("--ag-count", "4");
+  for (const [name, markup, style] of [
+    [labels.lineNames.line, ICONS.shapeLine, {}],
+    [labels.lineNames.dashed, ICONS.lineDashed, { dash: "dashed" }],
+    [labels.lineNames.arrow, ICONS.arrowRight, { arrowEnd: true }],
+    [labels.lineNames.double, ICONS.arrowBoth, { arrowStart: true, arrowEnd: true }],
+  ] as Array<[string, string, Partial<Layer>]>) {
+    const tile = element("button", "ag-tile");
+    tile.type = "button";
+    const text = element("span", "ag-tile-text");
+    text.textContent = name;
+    tile.append(icon(markup), text);
+    tile.addEventListener("click", () => addShape({ shape: "line", strokeWidth: 8, fill: "text", line: true, wide: true, ...style }));
+    lineTiles.append(tile);
   }
-  panes.elements.append(stickerGrid);
+  panes.elements.append(lineTiles);
+
+  heading(panes.elements, labels.frames);
+  const frameTiles = element("div", "ag-tiles");
+  frameTiles.style.setProperty("--ag-count", "4");
+  for (const [shape, markup, radius] of [["ellipse", ICONS.shapeCircle, 0], ["rect", ICONS.shapeRounded, 0.12], ["arch", ICONS.shapeArch, 0], ["heart", ICONS.shapeHeart, 0], ["star", ICONS.shapeStar, 0], ["hexagon", ICONS.shapeHexagon, 0], ["diamond", ICONS.shapeDiamond, 0], ["bubble", ICONS.shapeBubble, 0]] as Array<[ShapeKind, string, number]>) {
+    const tile = element("button", "ag-tile");
+    tile.type = "button";
+    const text = element("span", "ag-tile-text");
+    text.textContent = labels.stage.frameNames[shape];
+    tile.append(icon(markup), text);
+    tile.addEventListener("click", () => addFrame(shape, radius));
+    frameTiles.append(tile);
+  }
+  panes.elements.append(frameTiles);
+
+  heading(panes.elements, labels.grids);
+  const gridTiles = element("div", "ag-tiles");
+  gridTiles.style.setProperty("--ag-count", "4");
+  for (const [kind, markup] of [["across", ICONS.gridAcross], ["down", ICONS.gridDown], ["three", ICONS.gridThree], ["four", ICONS.gridFour]] as const) {
+    const tile = element("button", "ag-tile");
+    tile.type = "button";
+    const text = element("span", "ag-tile-text");
+    text.textContent = labels.gridNames[kind];
+    tile.append(icon(markup), text);
+    tile.addEventListener("click", () => addGrid(kind));
+    gridTiles.append(tile);
+  }
+  panes.elements.append(gridTiles);
+
+  const graphicsHeading = heading(panes.elements, labels.graphics);
+  const graphicsGrid = element("div", "ag-art-grid");
+  const graphicsMore = keyButton("ag-show-more", labels.showMore, ICONS.add);
+  panes.elements.append(graphicsGrid, graphicsMore);
+
+  heading(panes.elements, labels.stickers);
+  const stickerGrid = element("div", "ag-art-grid ag-sticker-grid");
+  const stickersMore = keyButton("ag-show-more", labels.showMore, ICONS.add);
+  const nothing = element("p", "ag-help");
+  nothing.textContent = labels.nothingFound;
+  nothing.hidden = true;
+  panes.elements.append(stickerGrid, stickersMore, nothing);
   for (const [index, button] of [...themeTiles.children].entries()) button.setAttribute("aria-label", labels.theme(THEMES[index].name));
 
   // Text: what the frame says, and up to three links.
@@ -856,10 +1087,15 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     button.addEventListener("click", () => addText(labels.newText[kind], size, weight));
     textPresets.append(button);
   }
+  heading(panes.text, labels.fontCombos);
+  const comboGrid = element("div", "ag-combos");
+  panes.text.append(comboGrid);
   const titleField = field(labels.title, title, (value) => (title = value));
   const speakerField = field(labels.speaker, speaker, (value) => (speaker = value));
   const handleField = field(labels.handle, handle, (value) => (handle = value));
-  panes.text.append(textPresets, titleField, speakerField, handleField, linkGroup);
+  panes.text.insertBefore(textPresets, panes.text.querySelector(".ag-combos")!.previousElementSibling);
+  heading(panes.text, labels.details);
+  panes.text.append(titleField, speakerField, handleField, linkGroup);
 
   // Photos and music: each a row with what is on now, a key to choose one, and a key to take it off.
   const fileRow = (pane: HTMLElement, name: string, accept: string, kind: "round" | "wide" | "sound", failed: string, apply: (file: Blob | null) => Promise<void>) => {
@@ -930,6 +1166,14 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   uploadInput.tabIndex = -1;
   const uploadGrid = element("div", "ag-uploads");
   panes.photos.append(uploadButton, uploadInput, uploadGrid);
+  const photosHeading = heading(panes.photos, labels.stockPhotos);
+  const photoSearch = element("input", "ag-input ag-search");
+  photoSearch.type = "search";
+  photoSearch.placeholder = labels.searchPhotos;
+  photoSearch.setAttribute("aria-label", labels.searchPhotos);
+  photoSearch.autocomplete = "off";
+  const photoGrid = element("div", "ag-photo-grid");
+  panes.photos.append(photoSearch, photoGrid);
   // Another picture for a picture already on the frame.
   const replaceInput = element("input", "ag-hidden");
   replaceInput.type = "file";
@@ -1151,6 +1395,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const stage = createStage({
     stage: stageArea,
     canvas: preview,
+    surface: scroller,
     labels: labels.stage,
     layers: () => layersFor(layout),
     change: setLayers,
@@ -1178,6 +1423,17 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     layerName,
     announce,
     time: () => clipTime(),
+    mediaSize(layer) {
+      const picture = pictures.get(layer.image ?? "");
+      if (picture?.image) return { width: picture.image.naturalWidth, height: picture.image.naturalHeight };
+      if (picture?.video?.videoWidth) return { width: picture.video.videoWidth, height: picture.video.videoHeight };
+      return null;
+    },
+    add(what) {
+      if (what === "text") addText(labels.newText.body, 60, 400);
+      else if (what === "line") addShape({ shape: "line", strokeWidth: 8, wide: true, line: true });
+      else addShape(what === "circle" ? { shape: "ellipse" } : { shape: "rect", radius: 0 });
+    },
     open(layer) {
       if (layer.kind === "links") {
         selectTab("text");
@@ -1199,6 +1455,48 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       }
     },
   });
+
+  // Zoom, as a share of the design's own size; null fits the page in the stage.
+  const ZOOMS = [10, 25, 33, 50, 67, 75, 100, 125, 150, 200, 300];
+  let zoom: number | null = null;
+  /** The zoom the picture shows at now, fitted or not, as a share of the design's size. */
+  const shownZoom = () => Math.round((preview.getBoundingClientRect().width / SIZES[layout].width) * 100);
+  function applyZoom(next: number | null) {
+    zoom = next;
+    const { width, height } = SIZES[layout];
+    if (zoom === null) {
+      preview.style.removeProperty("width");
+      preview.style.removeProperty("height");
+      delete stageArea.dataset.zoomed;
+    } else {
+      preview.style.width = `${(width * zoom) / 100}px`;
+      preview.style.height = `${(height * zoom) / 100}px`;
+      stageArea.dataset.zoomed = "";
+    }
+    zoomLevel.textContent = `${shownZoom()}%`;
+    zoomLevel.setAttribute("aria-label", `${labels.zoomLevel(shownZoom())}. ${labels.fitPage}`);
+    zoomLevel.setAttribute("aria-pressed", String(zoom === null));
+    stage?.refresh();
+  }
+  const zoomStep = (way: 1 | -1) => {
+    const now = shownZoom();
+    const next = way > 0 ? ZOOMS.find((level) => level > now + 1) : [...ZOOMS].reverse().find((level) => level < now - 1);
+    applyZoom(next ?? (way > 0 ? ZOOMS[ZOOMS.length - 1] : ZOOMS[0]));
+  };
+  zoomIn.addEventListener("click", () => zoomStep(1));
+  zoomOut.addEventListener("click", () => zoomStep(-1));
+  zoomLevel.addEventListener("click", () => applyZoom(null));
+  // Ctrl or Cmd with the wheel over the picture zooms, the way it does in a design tool.
+  scroller.addEventListener("wheel", (event) => {
+    if (!(event.ctrlKey || event.metaKey)) return;
+    event.preventDefault();
+    // In proportion to the wheel, so a trackpad's many small steps zoom smoothly and a mouse's few clicks still go far.
+    applyZoom(Math.min(300, Math.max(10, Math.round(shownZoom() * Math.exp(-event.deltaY * 0.0025)))));
+  }, { passive: false });
+  const zoomWatch = new ResizeObserver(() => {
+    if (zoom === null) zoomLevel.textContent = `${shownZoom()}%`;
+  });
+  zoomWatch.observe(scroller);
 
   function sizePreview() {
     // Half size: plenty for a preview, and a quarter of the pixels to paint every frame.
@@ -1257,7 +1555,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     paint();
     renderCues();
     stage?.refresh();
-    if (tab === "layers") renderLayers();
+    if (tab === "layers" && !timingHeld) renderLayers();
   }
 
   // Free editing: layers, their history, what can be added, and the fonts and pictures they use.
@@ -1326,9 +1624,100 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
         announce(layer.hidden ? labels.selectLayer(name) : labels.stage.hidden(name));
       });
       row.append(pick, toggle);
+      if (clipLength() > 0) row.append(timingTrack(layer, name));
       return row;
     }));
     if (focused?.dataset.layer) layerList.querySelector<HTMLElement>(`[data-layer="${focused.dataset.layer}"]`)?.focus();
+  }
+
+  // While a layer's time is dragged, the list stays as it is; it is drawn again when the drag ends.
+  let timingHeld = false;
+
+  /**
+   * A layer's stretch of the clip, as a bar along the clip's length: drag its ends to set when it shows from and
+   * until, or the bar to move both; arrows move an end a tenth of a second, a second with Shift.
+   */
+  function timingTrack(layer: Layer, name: string): HTMLElement {
+    const length = clipLength();
+    const track = element("div", "ag-layer-time");
+    const bar = element("span", "ag-layer-bar");
+    const ends = (["from", "until"] as const).map((which) => {
+      const end = element("span", `ag-layer-end ag-layer-${which}`);
+      end.setAttribute("role", "slider");
+      end.tabIndex = 0;
+      end.dataset.layer = `${layer.id}:${which}`;
+      end.setAttribute("aria-label", `${name}: ${which === "from" ? labels.stage.showFrom : labels.stage.showUntil}`);
+      end.setAttribute("aria-valuemin", "0");
+      end.setAttribute("aria-valuemax", String(Math.round(length * 10) / 10));
+      return end;
+    });
+    track.append(bar, ...ends);
+    let start = Math.min(length, layer.from ?? 0);
+    let stop = Math.min(length, layer.until ?? length);
+    const place = () => {
+      bar.style.left = `${(start / length) * 100}%`;
+      bar.style.width = `${(Math.max(0, stop - start) / length) * 100}%`;
+      ends[0].style.left = `${(start / length) * 100}%`;
+      ends[1].style.left = `${(stop / length) * 100}%`;
+      ends.forEach((end, index) => {
+        const at = index ? stop : start;
+        end.setAttribute("aria-valuenow", String(Math.round(at * 10) / 10));
+        end.setAttribute("aria-valuetext", formatTime(at));
+      });
+    };
+    place();
+    // The whole clip is the same as no times at all, so the ends at the clip's edges clear them.
+    const apply = (done: boolean) => {
+      const from = start <= 0.05 ? undefined : Math.round(start * 10) / 10;
+      const until = stop >= length - 0.05 ? undefined : Math.round(stop * 10) / 10;
+      timingHeld = !done;
+      setLayers(layersFor(layout).map((item) => (item.id === layer.id ? { ...item, from, until } : item)), done);
+      if (done) renderLayers();
+    };
+    const drag = (which: "from" | "until" | "both") => (event: PointerEvent) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const rect = track.getBoundingClientRect();
+      const x = event.clientX;
+      const [first, last] = [start, stop];
+      const move = (next: PointerEvent) => {
+        const shift = ((next.clientX - x) / rect.width) * length;
+        if (which === "from") start = Math.max(0, Math.min(last - 0.1, first + shift));
+        else if (which === "until") stop = Math.min(length, Math.max(first + 0.1, last + shift));
+        else {
+          const span = last - first;
+          start = Math.max(0, Math.min(length - span, first + shift));
+          stop = start + span;
+        }
+        place();
+        apply(false);
+      };
+      const end = () => {
+        window.removeEventListener("pointermove", move);
+        window.removeEventListener("pointerup", end);
+        window.removeEventListener("pointercancel", end);
+        apply(true);
+      };
+      window.addEventListener("pointermove", move);
+      window.addEventListener("pointerup", end);
+      window.addEventListener("pointercancel", end);
+    };
+    ends[0].addEventListener("pointerdown", drag("from"));
+    ends[1].addEventListener("pointerdown", drag("until"));
+    bar.addEventListener("pointerdown", drag("both"));
+    ends.forEach((end, index) => end.addEventListener("keydown", (event) => {
+      const step = event.shiftKey ? 1 : 0.1;
+      const delta = event.key === "ArrowRight" || event.key === "ArrowUp" ? step : event.key === "ArrowLeft" || event.key === "ArrowDown" ? -step : 0;
+      const jump = event.key === "Home" ? -Infinity : event.key === "End" ? Infinity : 0;
+      if (!delta && !jump) return;
+      event.preventDefault();
+      if (index === 0) start = Math.max(0, Math.min(stop - 0.1, jump ? (jump < 0 ? 0 : stop - 0.1) : start + delta));
+      else stop = Math.min(length, Math.max(start + 0.1, jump ? (jump > 0 ? length : start + 0.1) : stop + delta));
+      place();
+      apply(true);
+    }));
+    return track;
   }
 
   function travel(step: number) {
@@ -1377,8 +1766,282 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const side = 0.3 * Math.min(width, height);
     const { line, wide, ...style } = shape;
     const w = (line ? side * 1.6 : wide ? side * 1.4 : side) / width;
-    const h = (line ? Math.max(6, side * 0.03) : side) / height;
+    // A drawn line needs room for its arrowheads; a bar is just thin.
+    const h = (line ? (style.shape === "line" ? Math.max(40, side * 0.16) : Math.max(6, side * 0.03)) : side) / height;
     addLayer({ id: layerId("shape"), kind: "shape", x: 0.5 - w / 2, y: 0.5 - h / 2, w, h, rotation: 0, opacity: 1, fill: "accent", ...style });
+  }
+
+  /** An empty photo frame in the shape given, to fill from Photos or by pressing it. */
+  function addFrame(mask: ShapeKind, radius: number) {
+    const { width, height } = SIZES[layout];
+    const side = 0.42 * Math.min(width, height);
+    addLayer({ id: layerId("image"), kind: "image", mask, radius: radius || undefined, x: 0.5 - side / width / 2, y: 0.5 - side / height / 2, w: side / width, h: side / height, rotation: 0, opacity: 1 });
+  }
+
+  /** Empty photo frames side by side or in a square, as one group, with a small gap between them. */
+  function addGrid(kind: "across" | "down" | "three" | "four") {
+    const columns = kind === "across" ? 2 : kind === "three" ? 3 : kind === "four" ? 2 : 1;
+    const rows = kind === "down" ? 2 : kind === "four" ? 2 : 1;
+    const { width, height } = SIZES[layout];
+    const gap = 12 / Math.min(width, height);
+    const area = { x: 0.08, y: 0.18, w: 0.84, h: 0.64 };
+    const group = layerId("group");
+    const cells: Layer[] = [];
+    for (let row = 0; row < rows; row++) {
+      for (let column = 0; column < columns; column++) {
+        const w = (area.w - gap * (columns - 1)) / columns;
+        const h = (area.h - gap * (rows - 1)) / rows;
+        cells.push({ id: layerId("image"), kind: "image", group, x: area.x + column * (w + gap), y: area.y + row * (h + gap), w, h, rotation: 0, opacity: 1 });
+      }
+    }
+    setLayers([...layersFor(layout), ...cells], true);
+    stage.select(cells[cells.length - 1].id);
+  }
+
+  /** A graphic from the library, a fifth of the page across, in the middle. */
+  function addGraphic(item: LibraryItem, sticker: boolean) {
+    const { width, height } = SIZES[layout];
+    const side = (sticker ? 0.24 : 0.2) * Math.min(width, height);
+    const aspect = item.art.w / item.art.h;
+    const w = (aspect >= 1 ? side : side * aspect) / width;
+    const h = (aspect >= 1 ? side / aspect : side) / height;
+    const mono = item.art.paths.some((part) => part.fill === "currentColor" || part.stroke === "currentColor");
+    addLayer({ id: layerId("graphic"), kind: "graphic", art: item.art, color: mono ? "text" : undefined, x: 0.5 - w / 2, y: 0.5 - h / 2, w, h, rotation: 0, opacity: 1 });
+  }
+
+  /** A heading and a line under it in two fonts that go together, grouped. */
+  function addCombo(pair: { heading: string; body: string; headingWeight: number; uppercase?: boolean }) {
+    const group = layerId("group");
+    const heading: Layer = { id: layerId("text"), kind: "text", group, text: labels.newText.heading, font: pair.heading, size: 96, weight: pair.headingWeight, uppercase: pair.uppercase, align: "center", color: "text", x: 0.1, y: 0.38, w: 0.8, h: 0.1, rotation: 0, opacity: 1 };
+    const body: Layer = { id: layerId("text"), kind: "text", group, text: labels.newText.subheading, font: pair.body, size: 40, weight: 400, align: "center", color: "text", x: 0.15, y: 0.5, w: 0.7, h: 0.06, rotation: 0, opacity: 1 };
+    void Promise.all([loadFont(pair.heading), loadFont(pair.body)]).then(() => rebuild());
+    setLayers([...layersFor(layout), heading, body], true);
+    stage.select(body.id);
+  }
+
+  /** A photo from the library, read in as a picture of the user's own so it stays with the design. */
+  async function addStockPhoto(photo: StockPhoto) {
+    const key = `photo-${photo.id}`;
+    if (!pictures.has(key)) {
+      try {
+        const response = await fetch(photo.url);
+        if (!response.ok) throw new Error(String(response.status));
+        await keepPicture(await response.blob(), key, false);
+      } catch {
+        return tell(labels.pictureFailed);
+      }
+    }
+    addPicture(key);
+  }
+
+  function renderTemplates() {
+    templateGrid.replaceChildren(...hostTemplates.map((choice) => {
+      const tile = element("button", "ag-template");
+      tile.type = "button";
+      tile.setAttribute("aria-label", labels.useTemplate(choice.name));
+      const canvas = element("canvas", "ag-template-picture");
+      canvas.setAttribute("aria-hidden", "true");
+      const name = element("span", "ag-template-name");
+      name.textContent = choice.name;
+      tile.append(canvas, name);
+      tile.dataset.template = choice.id;
+      tile.addEventListener("click", () => applyHostTemplate(choice));
+      templateWatch?.observe(tile);
+      return tile;
+    }));
+    moreHeading.hidden = templateGrid.hidden = !hostTemplates.length;
+  }
+
+  // Each design's picture is drawn when its tile scrolls into view, with the fonts it uses once they arrive.
+  const templateWatch = typeof IntersectionObserver === "undefined" ? null : new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      templateWatch!.unobserve(entry.target);
+      const tile = entry.target as HTMLElement;
+      const choice = hostTemplates.find((item) => item.id === tile.dataset.template);
+      if (choice) drawTemplate(tile.querySelector("canvas")!, choice);
+    }
+  }, { root: drawer });
+
+  function drawTemplate(canvas: HTMLCanvasElement, choice: TemplateChoice) {
+    const made = choice.make(layout);
+    const { width, height } = SIZES[layout];
+    const scale = 240 / Math.max(width, height);
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    const paint = () => {
+      const painter = new Painter({ ...scene(), layers: made.layers, page: made.page, theme: made.theme !== undefined ? THEMES[made.theme] ?? theme : theme, overlay: undefined });
+      painter.animate = false;
+      painter.paint(canvas.getContext("2d")!, 0);
+    };
+    paint();
+    const fonts = [...new Set(made.layers.map((layer) => layer.font).filter((font): font is string => Boolean(font)))];
+    if (fonts.length) void Promise.all(fonts.map((font) => loadFont(font))).then(paint);
+  }
+
+  function applyHostTemplate(choice: TemplateChoice) {
+    const made = choice.make(layout);
+    page = made.page;
+    if (made.theme !== undefined) theme = THEMES[made.theme] ?? theme;
+    markTheme();
+    renderPageSwatches();
+    stage.select(null);
+    setLayers(made.layers.map((layer) => ({ ...layer })), true);
+    void loadUsedFonts().then(() => rebuild());
+  }
+
+  // The library's grids show a page of matches at a time; the search box narrows graphics and stickers together.
+  const PAGE = 48;
+  let graphicsShown = PAGE;
+  let stickersShown = PAGE;
+  // An emoji typed with its variation selector still finds the sticker that is listed without one.
+  const bare = (text: string) => text.toLowerCase().replace(/\uFE0F/g, "");
+  /**
+   * The items whose name or tags have a word starting with each word searched for, the closest first: a name that is
+   * the word, then a name that starts with it, then a word in the name, then a tag.
+   */
+  const matches = (items: LibraryItem[] | undefined) => {
+    const words = bare(elementSearch.value.trim()).split(/\s+/).filter(Boolean);
+    if (!words.length) return items ?? [];
+    const starts = (text: string, word: string) => (` ${text}`).replace(/[^\p{L}\p{N}\p{Extended_Pictographic}]+/gu, " ").includes(` ${word}`);
+    const scored: Array<[LibraryItem, number]> = [];
+    for (const item of items ?? []) {
+      const name = bare(item.name);
+      const tags = bare(item.tags ?? "");
+      let score = 0;
+      for (const word of words) {
+        const best = name === word ? 4 : name.startsWith(word) ? 3 : starts(name, word) ? 2 : starts(tags, word) ? 1 : 0;
+        if (!best) {
+          score = 0;
+          break;
+        }
+        score += best;
+      }
+      if (score) scored.push([item, score]);
+    }
+    return scored.sort((a, b) => b[1] - a[1]).map(([item]) => item);
+  };
+  function artPicture(art: Art): SVGSVGElement {
+    const ns = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(ns, "svg");
+    svg.setAttribute("viewBox", `0 0 ${art.w} ${art.h}`);
+    svg.setAttribute("aria-hidden", "true");
+    for (const part of art.paths) {
+      const path = document.createElementNS(ns, "path");
+      path.setAttribute("d", part.d);
+      path.setAttribute("fill", part.fill ?? "none");
+      if (part.rule) path.setAttribute("fill-rule", part.rule);
+      if (part.stroke) {
+        path.setAttribute("stroke", part.stroke);
+        path.setAttribute("stroke-width", String(part.width ?? 1));
+        path.setAttribute("stroke-linecap", "round");
+        path.setAttribute("stroke-linejoin", "round");
+      }
+      svg.append(path);
+    }
+    return svg;
+  }
+  function renderArt(grid: HTMLElement, more: HTMLButtonElement, items: LibraryItem[], shown: number, sticker: boolean) {
+    grid.replaceChildren(...items.slice(0, shown).map((item) => {
+      const button = element("button", "ag-art");
+      button.type = "button";
+      button.title = item.name;
+      button.setAttribute("aria-label", labels.addGraphic(item.name));
+      button.append(artPicture(item.art));
+      button.addEventListener("click", () => addGraphic(item, sticker));
+      return button;
+    }));
+    more.hidden = items.length <= shown;
+  }
+  function renderLibrary() {
+    const graphics = matches(library.graphics);
+    const stickers = matches(library.stickers);
+    renderArt(graphicsGrid, graphicsMore, graphics, graphicsShown, false);
+    renderArt(stickerGrid, stickersMore, stickers, stickersShown, true);
+    graphicsHeading.hidden = graphicsGrid.hidden = !library.graphics?.length;
+    nothing.hidden = !elementSearch.value.trim() || Boolean(graphics.length || stickers.length);
+    // Without a library, the stickers are the system's own emoji.
+    if (!library.stickers?.length) {
+      stickerGrid.replaceChildren(...STICKERS.map((sticker) => {
+        const button = element("button", "ag-sticker");
+        button.type = "button";
+        button.textContent = sticker;
+        button.setAttribute("aria-label", labels.addSticker(sticker));
+        button.addEventListener("click", () => addSticker(sticker));
+        return button;
+      }));
+      stickersMore.hidden = true;
+    }
+  }
+  elementSearch.addEventListener("input", () => {
+    graphicsShown = stickersShown = PAGE;
+    renderLibrary();
+  });
+  graphicsMore.addEventListener("click", () => {
+    graphicsShown += PAGE;
+    renderLibrary();
+  });
+  stickersMore.addEventListener("click", () => {
+    stickersShown += PAGE;
+    renderLibrary();
+  });
+
+  function renderPhotos() {
+    const words = photoSearch.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const shown = (library.photos ?? []).filter((photo) => words.every((word) => `${photo.name} ${photo.theme ?? ""}`.toLowerCase().includes(word)));
+    photoGrid.replaceChildren(...shown.map((photo) => {
+      const button = element("button", "ag-photo");
+      button.type = "button";
+      button.title = labels.photoBy(photo.name, photo.credit ?? "");
+      button.setAttribute("aria-label", labels.addPicture(photo.name));
+      const thumb = element("img", "");
+      thumb.alt = "";
+      thumb.loading = "lazy";
+      thumb.decoding = "async";
+      thumb.src = photo.thumb;
+      button.append(thumb);
+      button.addEventListener("click", () => void addStockPhoto(photo));
+      return button;
+    }));
+    photosHeading.hidden = photoSearch.hidden = photoGrid.hidden = !library.photos?.length;
+  }
+  photoSearch.addEventListener("input", renderPhotos);
+
+  // Pairs of fonts that sit well together, offered once the fonts they need are on the list.
+  const COMBOS = [
+    { heading: "Bebas Neue", body: "Inter Variable", headingWeight: 400, uppercase: true },
+    { heading: "Playfair Display Variable", body: "DM Sans Variable", headingWeight: 700 },
+    { heading: "Anton", body: "Space Grotesk Variable", headingWeight: 400, uppercase: true },
+    { heading: "Abril Fatface", body: "Raleway Variable", headingWeight: 400 },
+    { heading: "Syne Variable", body: "Outfit Variable", headingWeight: 800 },
+    { heading: "Archivo Black", body: "Archivo Variable", headingWeight: 400 },
+    { heading: "DM Serif Display", body: "Montserrat Variable", headingWeight: 400 },
+    { heading: "Unbounded Variable", body: "Nunito Variable", headingWeight: 700 },
+  ];
+  function renderCombos() {
+    const known = new Set(fontList.map((font) => font.family));
+    const usable = COMBOS.filter((pair) => known.has(pair.heading) && known.has(pair.body));
+    comboGrid.replaceChildren(...usable.map((pair) => {
+      const button = element("button", "ag-combo");
+      button.type = "button";
+      const big = element("span", "ag-combo-heading");
+      big.textContent = labels.newText.heading;
+      big.style.fontFamily = `"${pair.heading}", ${family}`;
+      big.style.fontWeight = String(pair.headingWeight);
+      if (pair.uppercase) big.style.textTransform = "uppercase";
+      const small = element("span", "ag-combo-body");
+      small.textContent = labels.newText.subheading;
+      small.style.fontFamily = `"${pair.body}", ${family}`;
+      button.append(big, small);
+      button.setAttribute("aria-label", `${labels.fontCombos}: ${fontList.find((font) => font.family === pair.heading)?.name ?? pair.heading}, ${fontList.find((font) => font.family === pair.body)?.name ?? pair.body}`);
+      button.addEventListener("click", () => addCombo(pair));
+      // The pair's own fonts, so the button shows what it adds.
+      void loadFont(pair.heading, labels.newText.heading);
+      void loadFont(pair.body, labels.newText.subheading);
+      return button;
+    }));
+    comboGrid.previousElementSibling?.toggleAttribute("hidden", !usable.length);
+    comboGrid.hidden = !usable.length;
   }
 
   /** An emoji as a big text layer in the middle of the page. */
@@ -1487,6 +2150,14 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const w = (natural.width * scale) / width;
     const h = (natural.height * scale) / height;
     const kind = picture?.video ? "video" : "image";
+    // A picked empty frame takes the picture instead of a new layer.
+    const frame = stage.selected;
+    if (frame && (frame.kind === "image" || frame.kind === "video") && !frame.image) {
+      setLayers(layersFor(layout).map((layer) => (layer.id === frame.id ? { ...layer, kind, image: key, crop: undefined } : layer)), true);
+      stage.refresh();
+      if (kind === "video") syncVideos(clipTime(), !audio.paused);
+      return;
+    }
     addLayer({ id: layerId(kind), kind, image: key, x: 0.5 - w / 2, y: 0.5 - h / 2, w, h, rotation: 0, opacity: 1 });
     if (kind === "video") syncVideos(clipTime(), !audio.paused);
   }
@@ -2028,7 +2699,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   // Exporting.
 
-  async function exportVideo(): Promise<ExportResult | null> {
+  async function exportVideo(choice: { fps?: number; scale?: number } = {}): Promise<ExportResult | null> {
     if (!source || exporting) return null;
     stop();
     exporting = true;
@@ -2039,6 +2710,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       await loadUsedFonts();
       const result = await exportClip(scene(), {
         prepare: videosAt,
+        fps: choice.fps,
+        scale: choice.scale,
         onProgress: (fraction) => {
           const percent = Math.round(fraction * 100);
           meter.style.setProperty("--progress", String(fraction));
@@ -2282,7 +2955,92 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // Buttons and keys.
 
   playButton.addEventListener("click", () => (audio.paused ? play() : stop()));
-  exportButton.addEventListener("click", () => void exportVideo().catch(() => {}));
+  function renderDownload() {
+    const group = (name: string, choices: Array<[string, boolean, () => void]>) => {
+      const box = element("div", "ag-field");
+      const title = element("span", "ag-field-name");
+      title.textContent = name;
+      const row = element("div", "ag-chips");
+      row.setAttribute("role", "radiogroup");
+      row.setAttribute("aria-label", name);
+      for (const [text, on, pick] of choices) {
+        const chip = element("button", "ag-key ag-chip");
+        chip.type = "button";
+        chip.setAttribute("role", "radio");
+        chip.setAttribute("aria-checked", String(on));
+        chip.textContent = text;
+        chip.addEventListener("click", () => {
+          pick();
+          renderDownload();
+          download.querySelector<HTMLElement>(`[aria-label="${name}"] [aria-checked=true]`)?.focus();
+        });
+        row.append(chip);
+      }
+      box.append(title, row);
+      return box;
+    };
+    const parts: HTMLElement[] = [group(labels.fileType, [
+      [labels.videoFile, downloadChoice.kind === "video", () => (downloadChoice = { ...downloadChoice, kind: "video" })],
+      [labels.pictureFile, downloadChoice.kind === "picture", () => (downloadChoice = { ...downloadChoice, kind: "picture" })],
+    ])];
+    const { width, height } = SIZES[layout];
+    const short = Math.min(width, height);
+    parts.push(group(labels.quality, [[`${Math.round(short * (2 / 3))}p`, downloadChoice.scale < 1, () => (downloadChoice = { ...downloadChoice, scale: 2 / 3 })], [`${short}p`, downloadChoice.scale === 1, () => (downloadChoice = { ...downloadChoice, scale: 1 })]]));
+    if (downloadChoice.kind === "video") parts.push(group(labels.frameRate, [24, 30, 60].map((fps) => [String(fps), downloadChoice.fps === fps, () => (downloadChoice = { ...downloadChoice, fps })])));
+    const go = keyButton("ag-download-go", labels.downloadNow, ICONS.export);
+    go.addEventListener("click", () => {
+      closeDownload();
+      exportButton.focus();
+      if (downloadChoice.kind === "picture") void downloadFrame(downloadChoice.scale).catch(() => tell(labels.failed));
+      else void exportVideo({ fps: downloadChoice.fps, scale: downloadChoice.scale }).catch(() => {});
+    });
+    download.replaceChildren(...parts, go);
+  }
+  function closeDownload() {
+    download.hidden = true;
+    exportButton.setAttribute("aria-expanded", "false");
+  }
+  exportButton.addEventListener("click", () => {
+    if (exporting || !source) return;
+    if (!download.hidden) return closeDownload();
+    renderDownload();
+    download.hidden = false;
+    exportButton.setAttribute("aria-expanded", "true");
+    download.querySelector<HTMLElement>("[aria-checked=true]")?.focus();
+  });
+  download.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    closeDownload();
+    exportButton.focus();
+  });
+  const gone = new AbortController();
+  document.addEventListener("pointerdown", (event) => {
+    if (!download.hidden && !download.contains(event.target as Node) && !exportButton.contains(event.target as Node)) closeDownload();
+  }, { signal: gone.signal });
+
+  /** The picture at the playhead as a PNG, the way the video shows it at that moment. */
+  async function downloadFrame(scale: number) {
+    await loadUsedFonts();
+    const time = clipTime();
+    await videosAt(time, false);
+    const { width, height } = SIZES[layout];
+    const canvas = element("canvas", "");
+    canvas.width = Math.round(width * scale);
+    canvas.height = Math.round(height * scale);
+    new Painter(scene()).paint(canvas.getContext("2d", { alpha: false })!, time);
+    syncVideos(time, false);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
+    if (!blob) throw new Error("The picture could not be made");
+    const result: ExportResult = { blob, type: "image/png", extension: "png" };
+    if (options.onExport) options.onExport(result);
+    else {
+      const link = element("a", "");
+      link.href = URL.createObjectURL(blob);
+      link.download = "clip.png";
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(link.href), 4000);
+    }
+  }
   openButton.addEventListener("click", () => audioInput.click());
   audioInput.addEventListener("change", () => {
     const file = audioInput.files?.[0];
@@ -2387,6 +3145,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     if (key === "z" || key === "y") {
       event.preventDefault();
       travel(key === "y" || event.shiftKey ? 1 : -1);
+    } else if (key === "=" || key === "+" || key === "-" || key === "0") {
+      event.preventDefault();
+      if (key === "0") applyZoom(null);
+      else zoomStep(key === "-" ? -1 : 1);
     }
   });
 
@@ -2461,6 +3223,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }).catch(() => {});
   void loadUsedFonts().then(() => rebuild());
   renderPageSwatches();
+  renderTemplates();
+  renderLibrary();
+  renderPhotos();
+  renderCombos();
   built = true;
   placeCaptions();
   record();
@@ -2531,16 +3297,30 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     setFonts(next) {
       fontList = next;
       void loadUsedFonts().then(() => rebuild());
+      renderCombos();
       stage.refresh();
     },
     async setImages(next) {
-      await Promise.all(Object.entries(next).filter(([key]) => !pictures.has(key)).map(([key, image]) => keepPicture(image, key, true).catch(() => {})));
+      await Promise.all(Object.entries(next).filter(([key]) => !pictures.has(key)).map(([key, image]) => keepPicture(image, key, !key.startsWith("photo-")).catch(() => {})));
       renderUploads();
       rebuild();
+    },
+    setTemplates(next) {
+      hostTemplates = next;
+      renderTemplates();
+    },
+    setLibrary(next) {
+      library = next;
+      renderLibrary();
+      renderPhotos();
     },
     destroy() {
       stop();
       observer.disconnect();
+      zoomWatch.disconnect();
+      templateWatch?.disconnect();
+      gone.abort();
+      stage.destroy();
       source?.close();
       source = null;
       music?.close();

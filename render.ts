@@ -1,5 +1,5 @@
 import { cueAt, timeWords, type Cue } from "./captions.js";
-import { defaultLayers, FRAME_SIZES, motionAt, type Adjust, type Layer, type Paint, type ShapeKind } from "./layers.js";
+import { defaultLayers, FRAME_SIZES, motionAt, type Adjust, type Crop, type Layer, type Paint, type ShapeKind } from "./layers.js";
 import { rms, Smoother, spectrum } from "./wave.js";
 
 export type Layout = "square" | "portrait" | "story" | "landscape";
@@ -174,6 +174,49 @@ function shapePath(ctx: CanvasRenderingContext2D, shape: ShapeKind | undefined, 
     ctx.lineTo(x + w - head, cy + shaft / 2);
     ctx.lineTo(x, cy + shaft / 2);
     ctx.closePath();
+  } else if (shape === "pentagon" || shape === "hexagon" || shape === "octagon") {
+    const sides = shape === "pentagon" ? 5 : shape === "hexagon" ? 6 : 8;
+    // An octagon sits on a flat side; the others stand on a corner's opposite, their first point straight up.
+    const turn = shape === "octagon" ? Math.PI / 8 : 0;
+    for (let i = 0; i < sides; i++) {
+      const angle = -Math.PI / 2 + turn + (i * 2 * Math.PI) / sides;
+      const px = cx + Math.cos(angle) * (w / 2);
+      const py = cy + Math.sin(angle) * (h / 2);
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+  } else if (shape === "cross") {
+    const a = w / 3;
+    const b = h / 3;
+    ctx.moveTo(x + a, y);
+    ctx.lineTo(x + 2 * a, y);
+    ctx.lineTo(x + 2 * a, y + b);
+    ctx.lineTo(x + w, y + b);
+    ctx.lineTo(x + w, y + 2 * b);
+    ctx.lineTo(x + 2 * a, y + 2 * b);
+    ctx.lineTo(x + 2 * a, y + h);
+    ctx.lineTo(x + a, y + h);
+    ctx.lineTo(x + a, y + 2 * b);
+    ctx.lineTo(x, y + 2 * b);
+    ctx.lineTo(x, y + b);
+    ctx.lineTo(x + a, y + b);
+    ctx.closePath();
+  } else if (shape === "parallelogram") {
+    const lean = w * 0.25;
+    ctx.moveTo(x + lean, y);
+    ctx.lineTo(x + w, y);
+    ctx.lineTo(x + w - lean, y + h);
+    ctx.lineTo(x, y + h);
+    ctx.closePath();
+  } else if (shape === "arch") {
+    // A doorway: straight sides and a round top.
+    const rise = Math.min(w / 2, h);
+    ctx.moveTo(x, y + h);
+    ctx.lineTo(x, y + rise);
+    ctx.ellipse(cx, y + rise, w / 2, rise, 0, Math.PI, 0);
+    ctx.lineTo(x + w, y + h);
+    ctx.closePath();
   } else if (shape === "bubble") {
     // A rounded box with a tail from its lower left.
     const body = h * 0.8;
@@ -190,6 +233,27 @@ function shapePath(ctx: CanvasRenderingContext2D, shape: ShapeKind | undefined, 
   } else {
     roundRect(ctx, x, y, w, h, radius);
   }
+}
+
+/** Ready-made looks for a picture, as canvas filters, by name. */
+export const FILTERS: Record<string, string> = {
+  vivid: "saturate(1.45) contrast(1.08)",
+  warm: "sepia(0.22) saturate(1.25) brightness(1.03)",
+  cool: "saturate(1.1) hue-rotate(-14deg) brightness(1.02)",
+  fade: "contrast(0.82) brightness(1.1) saturate(0.78)",
+  retro: "sepia(0.48) contrast(1.12) saturate(1.3)",
+  dramatic: "contrast(1.42) saturate(1.18) brightness(0.92)",
+  mono: "grayscale(1) contrast(1.08)",
+  noir: "grayscale(1) contrast(1.55) brightness(0.9)",
+};
+
+/** A border's dashes for its width: none, long dashes, or round dots. */
+function dashFor(ctx: CanvasRenderingContext2D, dash: Layer["dash"], width: number) {
+  if (dash === "dashed") ctx.setLineDash([width * 3, width * 2]);
+  else if (dash === "dotted") {
+    ctx.lineCap = "round";
+    ctx.setLineDash([0.01, width * 2]);
+  } else ctx.setLineDash([]);
 }
 
 /** A picture's tone as a canvas filter, in pixels of the frame being drawn. */
@@ -218,14 +282,19 @@ function sizeOf(source: CanvasImageSource): { width: number; height: number } {
   return { width, height };
 }
 
-/** Draws a picture over a whole box, filling it the way object-fit: cover does. */
-function drawCover(ctx: CanvasRenderingContext2D, image: CanvasImageSource, box: Box) {
+/**
+ * Draws a picture over a whole box, filling it the way object-fit: cover does; a crop zooms in further and moves the
+ * picture within what spills over, -1 showing its left or top edge and 1 its right or bottom.
+ */
+function drawCover(ctx: CanvasRenderingContext2D, image: CanvasImageSource, box: Box, crop?: Crop) {
   const size = sizeOf(image);
   if (!size.width || !size.height) return;
-  const scale = Math.max(box.width / size.width, box.height / size.height);
+  const scale = Math.max(box.width / size.width, box.height / size.height) * Math.max(1, crop?.zoom ?? 1);
   const width = size.width * scale;
   const height = size.height * scale;
-  ctx.drawImage(image, box.x + (box.width - width) / 2, box.y + (box.height - height) / 2, width, height);
+  const x = box.x - (width - box.width) * (0.5 + Math.max(-1, Math.min(1, crop?.x ?? 0)) / 2);
+  const y = box.y - (height - box.height) * (0.5 + Math.max(-1, Math.min(1, crop?.y ?? 0)) / 2);
+  ctx.drawImage(image, x, y, width, height);
 }
 
 /** Draws a picture into a circle, filling it the way object-fit: cover does. */
@@ -268,12 +337,29 @@ function textLines(ctx: CanvasRenderingContext2D, text: string, width: number): 
   return text.split("\n").flatMap((part) => (part.trim() ? wrap(ctx, part, width) : [""]));
 }
 
+/** Words as a layer shows them: in capitals when it says so, each line typed a bullet or a number of a list. */
+export function shownText(layer: Layer, text: string): string {
+  let shown = layer.uppercase ? text.toLocaleUpperCase() : text;
+  if (layer.list) {
+    let count = 0;
+    shown = shown.split("\n").map((line) => (line.trim() ? (layer.list === "number" ? `${++count}. ` : "• ") + line : line)).join("\n");
+  }
+  return shown;
+}
+
+/** The canvas's font and letter spacing for a text layer at a size. */
+function typeset(ctx: CanvasRenderingContext2D, layer: Layer, family: string, unit: number, weight = 400) {
+  ctx.font = fontOf(layer, family, unit, weight);
+  // Thousandths of the font size, as design tools count it; a browser without letterSpacing leaves it out.
+  (ctx as CanvasRenderingContext2D & { letterSpacing: string }).letterSpacing = layer.letterSpacing ? `${Math.round((layer.letterSpacing / 1000) * (layer.size ?? 40) * unit * 100) / 100}px` : "0px";
+}
+
 /** How tall a text layer's words stand, as a share of the frame's height, at the frame's size. */
 export function textHeight(ctx: CanvasRenderingContext2D, layer: Layer, text: string, family: string, width: number, height: number): number {
   const unit = Math.min(width, height) / 1080;
-  ctx.font = fontOf(layer, family, unit);
-  const shown = layer.uppercase ? text.toLocaleUpperCase() : text;
-  return (Math.max(1, textLines(ctx, shown, layer.w * width).length) * (layer.size ?? 40) * unit * 1.15) / height;
+  typeset(ctx, layer, family, unit);
+  const shown = shownText(layer, text);
+  return (Math.max(1, textLines(ctx, shown, layer.w * width).length) * (layer.size ?? 40) * unit * (layer.lineHeight ?? 1.15)) / height;
 }
 
 // Layers drawn as one line, centred in their box; titles and free text wrap down from the top of theirs.
@@ -362,7 +448,7 @@ export class Painter {
    * its way in while it comes in. Outside its times it isn't drawn while the clip plays.
    */
   private paintLayer(ctx: CanvasRenderingContext2D, layer: Layer, time: number, font: string, unit: number, width: number, height: number) {
-    const motion = motionAt(layer, time, this.animate);
+    const motion = motionAt(layer, time, this.animate, this.duration);
     if (!motion) return;
     const w = layer.w * width;
     const h = layer.h * height;
@@ -370,27 +456,49 @@ export class Painter {
     const { theme } = this.scene;
     ctx.save();
     ctx.globalAlpha = Math.min(1, Math.max(0, layer.opacity ?? 1)) * motion.alpha;
-    ctx.translate((layer.x + layer.w / 2) * width + motion.dx * w, (layer.y + layer.h / 2) * height + motion.dy * h);
+    ctx.translate((layer.x + layer.w / 2) * width, (layer.y + layer.h / 2) * height);
     if (layer.rotation) ctx.rotate((layer.rotation * Math.PI) / 180);
+    // A wipe uncovers the layer from the left, and a baseline holds it inside its box, both where the layer ends up.
+    if (motion.clip < 1 || motion.boxed) {
+      const spare = motion.boxed ? 0 : Math.max(w, h);
+      ctx.beginPath();
+      ctx.rect(box.x - spare, box.y - spare, spare + w * motion.clip + (motion.clip >= 1 ? spare : 0), h + spare * 2);
+      ctx.clip();
+    }
+    if (motion.dx || motion.dy) ctx.translate(motion.dx * w, motion.dy * h);
+    if (motion.rotate) ctx.rotate((motion.rotate * Math.PI) / 180);
     if (motion.scale !== 1) ctx.scale(motion.scale, motion.scale);
+    const blur = motion.blur ? `blur(${Math.round(motion.blur * unit * 10) / 10}px)` : "";
+    if (blur) ctx.filter = blur;
     if (layer.kind === "avatar") this.paintAvatar(ctx, box, font);
     else if (layer.kind === "visual") this.paintVisual(ctx, box, time, paintOf(layer.color, theme, "accent"), unit, layer.visual ?? this.scene.visual, this.meterFor(layer.id));
     else if (layer.kind === "captions") this.paintCaptions(ctx, box, time, layer, font, unit);
     else if (layer.kind === "image" || layer.kind === "video") {
       const image = this.scene.images?.get(layer.image ?? "");
+      // The picture stays inside its box: a cover or a crop draws past it. A frame cuts it to its shape, and rounded
+      // corners to theirs.
+      shapePath(ctx, layer.mask ?? "rect", box, (layer.radius ?? 0) * Math.min(w, h));
+      ctx.clip();
       if (image) {
-        if (layer.radius) {
-          roundRect(ctx, box.x, box.y, w, h, layer.radius * Math.min(w, h));
-          ctx.clip();
-        }
         if (layer.flipX || layer.flipY) ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
-        if (layer.adjust) ctx.filter = filterOf(layer.adjust, unit);
-        drawCover(ctx, image, box);
-      }
-    } else if (layer.kind === "shape") {
+        const tone = [layer.filter ? FILTERS[layer.filter] ?? "" : "", layer.adjust ? filterOf(layer.adjust, unit) : "", blur].filter((part) => part && part !== "none").join(" ");
+        if (tone) ctx.filter = tone;
+        drawCover(ctx, image, box, layer.crop);
+      } else if (!this.animate) this.paintPlaceholder(ctx, box);
+    } else if (layer.kind === "graphic") this.paintGraphic(ctx, layer, box);
+    else if (layer.kind === "shape" && layer.shape === "line") this.paintLine(ctx, layer, box, unit);
+    else if (layer.kind === "shape") {
       ctx.fillStyle = paintOf(layer.fill, theme, "accent");
       shapePath(ctx, layer.shape, box, (layer.radius ?? 0) * Math.min(w, h));
       ctx.fill();
+      if (layer.strokeWidth) {
+        ctx.lineWidth = layer.strokeWidth * unit;
+        ctx.lineJoin = "round";
+        ctx.strokeStyle = paintOf(layer.stroke, theme, "text");
+        dashFor(ctx, layer.dash, ctx.lineWidth);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
     } else {
       const text = this.textOf(layer, time);
       // A typed-in layer shows its words a letter at a time.
@@ -399,11 +507,101 @@ export class Painter {
     ctx.restore();
   }
 
-  /** Words drawn with a layer's effects: the colour behind the line first, then the outline, then the letters. */
+  /** An empty frame, while the picture is edited: a soft tint with a small picture sign, to show where a photo goes. */
+  private paintPlaceholder(ctx: CanvasRenderingContext2D, box: Box) {
+    ctx.fillStyle = "rgba(128, 128, 128, 0.18)";
+    ctx.fillRect(box.x - 1, box.y - 1, box.width + 2, box.height + 2);
+    const side = Math.min(box.width, box.height) * 0.28;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2;
+    ctx.strokeStyle = "rgba(128, 128, 128, 0.6)";
+    ctx.lineWidth = Math.max(1.5, side * 0.07);
+    ctx.lineJoin = "round";
+    ctx.beginPath();
+    ctx.rect(cx - side / 2, cy - side * 0.38, side, side * 0.76);
+    ctx.moveTo(cx - side / 2, cy + side * 0.22);
+    ctx.lineTo(cx - side * 0.12, cy - side * 0.08);
+    ctx.lineTo(cx + side * 0.18, cy + side * 0.2);
+    ctx.stroke();
+  }
+
+  /** A drawing of paths, fitted inside the box with its shape kept; "currentColor" takes the layer's colour. */
+  private paintGraphic(ctx: CanvasRenderingContext2D, layer: Layer, box: Box) {
+    const art = layer.art;
+    if (!art?.paths.length || !art.w || !art.h) return;
+    const scale = Math.min(box.width / art.w, box.height / art.h);
+    if (layer.flipX || layer.flipY) ctx.scale(layer.flipX ? -1 : 1, layer.flipY ? -1 : 1);
+    ctx.translate(box.x + (box.width - art.w * scale) / 2, box.y + (box.height - art.h * scale) / 2);
+    ctx.scale(scale, scale);
+    const own = paintOf(layer.color, this.scene.theme, "text");
+    const tint = (paint: string) => (paint === "currentColor" ? own : paint);
+    ctx.lineCap = "round";
+    ctx.lineJoin = "round";
+    for (const part of art.paths) {
+      const path = new Path2D(part.d);
+      if (part.fill && part.fill !== "none") {
+        ctx.fillStyle = tint(part.fill);
+        ctx.fill(path, part.rule ?? "nonzero");
+      }
+      if (part.stroke && part.stroke !== "none") {
+        ctx.strokeStyle = tint(part.stroke);
+        ctx.lineWidth = part.width ?? 1;
+        ctx.stroke(path);
+      }
+    }
+  }
+
+  /** A straight line across the middle of its box, in its colour and weight, with an arrowhead at either end. */
+  private paintLine(ctx: CanvasRenderingContext2D, layer: Layer, box: Box, unit: number) {
+    const color = paintOf(layer.fill, this.scene.theme, "accent");
+    const weight = Math.max(1, (layer.strokeWidth ?? 8) * unit);
+    const head = weight * 3.2;
+    const y = box.y + box.height / 2;
+    const left = box.x + (layer.arrowStart ? head * 0.9 : 0);
+    const right = box.x + box.width - (layer.arrowEnd ? head * 0.9 : 0);
+    ctx.strokeStyle = color;
+    ctx.fillStyle = color;
+    ctx.lineWidth = weight;
+    ctx.lineCap = "butt";
+    dashFor(ctx, layer.dash, weight);
+    ctx.beginPath();
+    ctx.moveTo(left, y);
+    ctx.lineTo(right, y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const arrow = (tip: number, back: number) => {
+      ctx.beginPath();
+      ctx.moveTo(tip, y);
+      ctx.lineTo(back, y - head * 0.62);
+      ctx.lineTo(back, y + head * 0.62);
+      ctx.closePath();
+      ctx.fill();
+    };
+    if (layer.arrowEnd) arrow(box.x + box.width, box.x + box.width - head);
+    if (layer.arrowStart) arrow(box.x, box.x + head);
+  }
+
+  /**
+   * Words drawn with a layer's effects: the colour behind the line first, then any copies the effect sets behind the
+   * words, then the outline, then the letters, then a rule under or through them.
+   */
   private drawWords(ctx: CanvasRenderingContext2D, layer: Layer, text: string, x: number, y: number, size: number, maxWidth?: number) {
     const { theme } = this.scene;
+    const color = ctx.fillStyle;
+    // Letter spacing also falls after the last letter, so the words are measured and placed without that last space.
+    const trail = layer.letterSpacing ? (layer.letterSpacing / 1000) * size : 0;
+    if (trail) x += ctx.textAlign === "center" ? trail / 2 : ctx.textAlign === "right" ? trail : 0;
+    const effect = layer.effect;
+    const copy = (fill: string | CanvasGradient | CanvasPattern, dx: number, dy: number, alpha = 1) => {
+      const was = ctx.globalAlpha;
+      ctx.globalAlpha = was * alpha;
+      ctx.fillStyle = fill;
+      ctx.fillText(text, x + dx, y + dy, maxWidth);
+      ctx.globalAlpha = was;
+      ctx.fillStyle = color;
+    };
     if (layer.background) {
-      const width = Math.min(maxWidth ?? Infinity, ctx.measureText(text).width);
+      const width = Math.min(maxWidth ?? Infinity, ctx.measureText(text).width - trail);
       const left = ctx.textAlign === "center" ? x - width / 2 : ctx.textAlign === "right" ? x - width : x;
       const top = ctx.textBaseline === "top" ? y : y - size * 0.6;
       const fill = ctx.fillStyle;
@@ -412,10 +610,26 @@ export class Painter {
       ctx.fill();
       ctx.fillStyle = fill;
     }
+    const accent = paintOf(layer.effectColor, theme, "accent");
+    if (effect === "splice") copy(accent, size * 0.07, size * 0.07);
+    else if (effect === "echo") {
+      copy(color, size * 0.12, size * 0.12, 0.22);
+      copy(color, size * 0.06, size * 0.06, 0.45);
+    } else if (effect === "glitch") {
+      copy("#00e5ff", -size * 0.045, 0);
+      copy("#ff2bd6", size * 0.045, 0);
+    }
     if (layer.shadow) {
       ctx.shadowColor = "rgba(0, 0, 0, 0.45)";
       ctx.shadowBlur = size * 0.28;
       ctx.shadowOffsetY = size * 0.06;
+    } else if (effect === "lift") {
+      ctx.shadowColor = "rgba(0, 0, 0, 0.32)";
+      ctx.shadowBlur = size * 0.5;
+      ctx.shadowOffsetY = size * 0.14;
+    } else if (effect === "neon") {
+      ctx.shadowColor = typeof color === "string" ? color : accent;
+      ctx.shadowBlur = size * 0.45;
     }
     if (layer.outline) {
       ctx.lineJoin = "round";
@@ -423,10 +637,51 @@ export class Painter {
       ctx.strokeStyle = paintOf(layer.outline, theme, "text");
       ctx.strokeText(text, x, y, maxWidth);
       // One shadow, under the outline, not a second under the letters.
-      ctx.shadowColor = "transparent";
+      if (effect !== "neon") ctx.shadowColor = "transparent";
     }
-    ctx.fillText(text, x, y, maxWidth);
+    if (effect === "hollow" || effect === "splice") {
+      ctx.lineJoin = "round";
+      ctx.lineWidth = Math.max(1, size * 0.045);
+      ctx.strokeStyle = color;
+      ctx.strokeText(text, x, y, maxWidth);
+    } else ctx.fillText(text, x, y, maxWidth);
     ctx.shadowColor = "transparent";
+    if (layer.underline || layer.strike) {
+      const width = Math.min(maxWidth ?? Infinity, ctx.measureText(text).width - trail);
+      const left = ctx.textAlign === "center" ? x - width / 2 : ctx.textAlign === "right" ? x - width : x;
+      const top = ctx.textBaseline === "top" ? y : y - size * 0.5;
+      const thick = Math.max(1, size * 0.06);
+      ctx.fillStyle = color;
+      if (layer.underline) ctx.fillRect(left, top + size * 1.02, width, thick);
+      if (layer.strike) ctx.fillRect(left, top + size * 0.52, width, thick);
+    }
+  }
+
+  /** One line of words bent along an arc, a letter at a time, each turned to follow it. */
+  private drawCurved(ctx: CanvasRenderingContext2D, layer: Layer, text: string, box: Box, size: number) {
+    const letters = [...text];
+    const widths = letters.map((letter) => ctx.measureText(letter).width);
+    const total = widths.reduce((sum, width) => sum + width, 0);
+    const bend = Math.max(-100, Math.min(100, layer.curve ?? 0)) / 100;
+    // A full bend wraps the words three quarters of the way round a circle.
+    const sweep = Math.max(0.05, Math.abs(bend) * Math.PI * 1.5);
+    const radius = total / sweep;
+    const smile = bend > 0;
+    const cx = box.x + box.width / 2;
+    const cy = box.y + box.height / 2 + (smile ? radius : -radius);
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const plain = { ...layer, background: undefined, underline: false, strike: false };
+    let along = 0;
+    letters.forEach((letter, index) => {
+      const angle = -sweep / 2 + (along + widths[index] / 2) / radius;
+      along += widths[index];
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.rotate(smile ? angle : -angle);
+      this.drawWords(ctx, plain, letter, 0, smile ? -radius : radius, size);
+      ctx.restore();
+    });
   }
 
   /** What a text layer says: the scene's own words for the built-in ones, its own for the rest. */
@@ -442,21 +697,22 @@ export class Painter {
 
   private paintText(ctx: CanvasRenderingContext2D, box: Box, layer: Layer, text: string, font: string, unit: number) {
     if (!text) return;
-    if (layer.uppercase) text = text.toLocaleUpperCase();
+    text = shownText(layer, text);
     const quiet = layer.kind === "handle" || layer.kind === "links" || layer.kind === "time";
-    ctx.font = fontOf(layer, font, unit, layer.kind === "title" ? 700 : 400);
+    typeset(ctx, layer, font, unit, layer.kind === "title" ? 700 : 400);
     ctx.fillStyle = paintOf(layer.color, this.scene.theme, quiet ? "muted" : "text");
+    const size = (layer.size ?? 40) * unit;
+    if (layer.curve) return this.drawCurved(ctx, layer, text.replace(/\s*\n\s*/g, " "), box, size);
     const align = layer.align ?? "left";
     ctx.textAlign = align;
     const x = align === "center" ? box.x + box.width / 2 : align === "right" ? box.x + box.width : box.x;
-    const size = (layer.size ?? 40) * unit;
     if (SINGLE_LINE.has(layer.kind)) {
       ctx.textBaseline = "middle";
       this.drawWords(ctx, layer, text, x, box.y + box.height / 2, size, box.width);
       return;
     }
     ctx.textBaseline = "top";
-    const lineHeight = size * 1.15;
+    const lineHeight = size * (layer.lineHeight ?? 1.15);
     let lines = textLines(ctx, text, box.width);
     // A title keeps to the lines its box has room for; free text runs as long as it is.
     if (layer.kind === "title") lines = lines.slice(0, Math.max(1, Math.floor(box.height / lineHeight + 0.05)));
@@ -565,11 +821,11 @@ export class Painter {
     const highlight = paintOf(layer.highlight, theme, "accent");
     const onHighlight = layer.highlight && layer.highlight !== "accent" ? inkOn(highlight) : theme.onAccent;
     const said = paintOf(layer.color, theme, "text");
-    ctx.font = fontOf(layer, font, unit, 650);
+    typeset(ctx, layer, font, unit, 650);
     ctx.textBaseline = "middle";
     ctx.textAlign = "left";
     const space = ctx.measureText(" ").width;
-    const lineHeight = size * 1.34;
+    const lineHeight = size * (layer.lineHeight ?? 1.34);
     // Lay the words out in lines first, so each can be drawn, and the one being said marked, in its place.
     const lines: Array<Array<{ text: string; width: number; start: number; end: number }>> = [[]];
     let lineWidth = 0;
