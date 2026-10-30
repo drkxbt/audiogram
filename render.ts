@@ -588,6 +588,30 @@ function cutShort(ctx: CanvasRenderingContext2D, line: string, width: number): s
 }
 
 /** Words as a layer shows them: in capitals when it says so, each line typed a bullet or a number of a list. */
+/**
+ * The scene a design's preview tile is painted from: the design as it comes, on the editor's recording and fonts, with
+ * none of the user's own picture, logo, background, words, links, uploads or captions, so the tile stays a sample
+ * whatever has been imported. `thumbs` are the library photos the design itself asks for.
+ */
+export function templatePreview(base: Scene, made: { layers: Layer[]; page?: Page | null; theme?: number }, thumbs: Array<[string, CanvasImageSource]>): Scene {
+  return {
+    ...base,
+    title: "",
+    speaker: "",
+    handle: "",
+    links: [],
+    cover: null,
+    logo: null,
+    backdrop: null,
+    captions: [],
+    images: new Map(thumbs),
+    overlay: undefined,
+    layers: made.layers,
+    page: made.page,
+    theme: made.theme !== undefined ? THEMES[made.theme] ?? base.theme : base.theme,
+  };
+}
+
 export function shownText(layer: Layer, text: string): string {
   let shown = layer.uppercase ? text.toLocaleUpperCase() : text;
   if (layer.list) {

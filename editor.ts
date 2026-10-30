@@ -2,7 +2,7 @@ import { clip, cueAt, editCue, formatTime, markStart, paginate, parseSubtitles, 
 import { exportClip, type ExportResult } from "./export.js";
 import { clipTimeAt, partsLength, readClip, readReel, stitchCues, type Reel } from "./parts.js";
 import { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
-import { Painter, SIZES, THEMES, VISUALS, type Animation, type Layout, type Overlay, type Page, type Scene, type Theme, type Visual } from "./render.js";
+import { Painter, SIZES, templatePreview, THEMES, VISUALS, type Animation, type Layout, type Overlay, type Page, type Scene, type Theme, type Visual } from "./render.js";
 import { OUTLINE_RATE, openSource, type AudioSource } from "./source.js";
 import { element, icon, iconButton, ICONS, keyButton, rename } from "./ui.js";
 import { colourPanel, COLOUR_LABELS, documentColours, hexToHsv, markPicked, type ColourChoice } from "./colour.js";
@@ -2178,10 +2178,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     Object.assign(canvas, thumbSize());
     const thumbs = photoThumbs(made.layers, () => paint());
     const paint = () => {
-      // A thumbnail shows the template as it comes, without the user's background or other pictures.
-      const base = scene();
-      const images = new Map([...(base.images ?? []), ...thumbs]);
-      const painter = new Painter({ ...base, images, backdrop: null, layers: made.layers, page: made.page, theme: made.theme !== undefined ? THEMES[made.theme] ?? theme : theme, overlay: undefined });
+      // A thumbnail is the template as it comes: a sample, whatever the user has imported or written.
+      const painter = new Painter(templatePreview(scene(), made, thumbs));
       painter.animate = false;
       painter.placeholders = true;
       painter.captionsSample = labels.captionsSample;
