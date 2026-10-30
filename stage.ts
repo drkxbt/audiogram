@@ -2296,7 +2296,13 @@ export function createStage(host: StageHost): Stage {
       sizeInput.max = "400";
       sizeInput.value = String(Math.round(layer.size ?? 40));
       sizeInput.setAttribute("aria-label", labels.size);
-      const setSize = (value: number) => update(find(layer.id)!, { size: Math.min(400, Math.max(8, Math.round(value))) });
+      // A new size changes only this field, so the bar stays as it is: built again, it would swap the key a press is
+      // landing on when that press is what takes focus from the field, and the press would be lost.
+      const setSize = (value: number) => {
+        const size = Math.min(400, Math.max(8, Math.round(value)));
+        sizeInput.value = String(size);
+        replaceLayer({ ...find(layer.id)!, size }, true);
+      };
       smaller.addEventListener("click", () => setSize((find(layer.id)!.size ?? 40) - 2));
       larger.addEventListener("click", () => setSize((find(layer.id)!.size ?? 40) + 2));
       sizeInput.addEventListener("change", () => setSize(Number(sizeInput.value) || 40));

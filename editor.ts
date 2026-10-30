@@ -2920,7 +2920,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     renderPageSwatches();
     stage.select(null);
     madeWith = { ...madeWith, [layout]: id };
-    setLayers(chosen.layers, true);
+    // Captions already written stay on the picture: a blank page starts without them, but not once there are some.
+    const keepCaptions = cues.length && !chosen.layers.some((layer) => layer.kind === "captions");
+    setLayers(keepCaptions ? [...chosen.layers, { ...defaultLayers(layout).find((layer) => layer.kind === "captions")!, id: layerId("captions") }] : chosen.layers, true);
   }
 
   function markTheme() {
