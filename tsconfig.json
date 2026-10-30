@@ -23,6 +23,7 @@
     "wave.ts",
     "captions.ts",
     "mp4.ts",
+    "avc.ts",
     "render.ts",
     "export.ts",
     "editor.ts",
