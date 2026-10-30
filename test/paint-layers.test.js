@@ -461,8 +461,18 @@ test("at the sample point (a template's picture, or no clip yet) the sample is p
   const marked = words.findIndex((call) => call.fillStyle !== "#ffffff");
   assert.ok(marked > 0 && marked < 5, `one word in the middle is marked: ${marked}`);
   assert.ok(words.slice(0, marked).every((call) => call.globalAlpha === 1), "the words before it are said");
-  assert.ok(words.slice(marked + 1).every((call) => call.globalAlpha === 0.5), "the words after it are still to come");
+  assert.ok(words.slice(marked + 1).every((call) => call.globalAlpha === 0.72), "the words after it are still to come");
   assert.ok(log.calls.some((call) => call.op === "fill" && call.fillStyle === "#ffcc00"), "the mark is drawn in the highlight");
+});
+
+test("words still to come stay readable on a strong page: the caption's colour at 72%, not half", () => {
+  const cue = { start: 0, end: 4, text: "ship it now", words: [{ text: "ship", start: 0, end: 1 }, { text: "it", start: 1, end: 2 }, { text: "now", start: 2, end: 3 }] };
+  const layer = { id: "c", kind: "captions", x: 0.1, y: 0.4, w: 0.8, h: 0.3, rotation: 0, opacity: 1, color: "#ffffff", highlight: "#ffcc00" };
+  const { ctx, calls } = canvasLog(1080, 1080);
+  new Painter(scene({ layers: [layer], captions: [cue], page: { color: "#a8121b" } })).paint(ctx, 0.5);
+  const now = calls.find((call) => call.op === "fillText" && call.text === "now");
+  assert.equal(now.fillStyle, "#ffffff");
+  assert.equal(now.globalAlpha, 0.72);
 });
 
 test("the words of a label take up only part of its box, across from where they are aligned", async () => {

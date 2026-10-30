@@ -1926,9 +1926,10 @@ export class Painter {
           ctx.fill();
         }
         ctx.fillStyle = saying ? onHighlight : done ? said : layer.color ? said : theme.muted;
-        // A design's own caption colour stays its own for the words still to come, only fainter.
+        // A design's own caption colour stays its own for the words still to come, only fainter: at 72% white still
+        // reads at 3:1 on a deep red or blue page, where half faded into a muddy pink.
         const was = ctx.globalAlpha;
-        if (!saying && !done && layer.color) ctx.globalAlpha = was * 0.5;
+        if (!saying && !done && layer.color) ctx.globalAlpha = was * 0.72;
         this.drawWords(ctx, wordStyle, word.text, x, y, size);
         ctx.globalAlpha = was;
         x += word.width + space;
