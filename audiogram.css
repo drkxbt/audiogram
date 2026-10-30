@@ -1,6 +1,8 @@
 /* audiogram. The editor's own colours and sizes are custom properties on .ag; the video's colours are its themes. */
 
 .ag {
+  /* Every caret in the editor takes the colour of the words it sits in, whatever the host page passes down. */
+  caret-color: auto;
   --ag-bg: #ffffff;
   --ag-surface: #f6f5f1;
   --ag-field: #f1f0eb;
