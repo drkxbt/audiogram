@@ -166,7 +166,7 @@ test("lines are uncovered from the left, and every form draws without throwing i
     const calls = paint(chartLayer(kind, kind), 1, tiny);
     // Labels go before they can overlap: nothing wider than the box is written.
     for (const call of calls.filter((entry) => entry.op === "fillText")) {
-      const px = Number(call.font.match(/(\d+)px/)[1]);
+      const px = Number(call.font.match(/([\d.]+)px/)[1]);
       assert.ok(call.text.length * px * 0.5 <= tiny.width + 1e-6, `${kind}: ${call.text} at ${px}px`);
     }
   }

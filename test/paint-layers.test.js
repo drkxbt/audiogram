@@ -378,14 +378,25 @@ test("spaced-out words are centred on their letters, not on the space after the 
   assert.ok(Math.abs(x(spaced.calls) - x(plain.calls) - 15) < 1e-6, `moved by half of 30 px: ${x(spaced.calls) - x(plain.calls)}`);
 });
 
+test("a title that just fits one line at full size keeps to one line in a smaller export", () => {
+  // 20 letters at 64 px run 640 px in the log's measure: the box is exactly that wide and one line tall.
+  const layer = { id: "t", kind: "title", x: 0.1, y: 0.1, w: 640 / 1080, h: (64 * 1.15) / 1080, rotation: 0, opacity: 1, size: 64 };
+  for (const side of [1080, 720]) {
+    const log = canvasLog(side, side);
+    new Painter(scene({ layers: [layer], title: "SMALL BETS BIG WEEKS" })).paint(log.ctx, 0);
+    const lines = log.calls.filter((call) => call.op === "fillText").map((call) => call.text);
+    assert.deepEqual(lines, ["SMALL BETS BIG WEEKS"], `at ${side} px`);
+  }
+});
+
 test("words in a box that hugs them break only where a line was typed, and the box is as wide as the longest line", () => {
   const layer = { id: "t", kind: "text", text: "A long line that would wrap\nShort", autoWidth: true, x: 0, y: 0, w: 0.1, h: 0.1, rotation: 0, opacity: 1, size: 40 };
   const log = canvasLog(1000, 1000);
   new Painter(scene({ layers: [layer] })).paint(log.ctx, 0);
   const lines = log.calls.filter((call) => call.op === "fillText").map((call) => call.text);
   assert.deepEqual(lines, ["A long line that would wrap", "Short"]);
-  // measureText in the log runs half the size a letter; 40 design pixels are 37 on a 1000 px frame.
-  assert.ok(Math.abs(textWidth(log.ctx, layer, layer.text, "Geist", 1000, 1000) - (27 * 37 * 0.5) / 1000) < 1e-9);
+  // measureText in the log runs half the size a letter; 40 design pixels are 37.04 on a 1000 px frame.
+  assert.ok(Math.abs(textWidth(log.ctx, layer, layer.text, "Geist", 1000, 1000) - (27 * 37.04 * 0.5) / 1000) < 1e-9);
   assert.ok(Math.abs(textHeight(log.ctx, layer, layer.text, "Geist", 1000, 1000) - (2 * 40 * (1000 / 1080) * 1.15) / 1000) < 1e-9, "two typed lines tall");
 });
 

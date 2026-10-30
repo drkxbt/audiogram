@@ -552,7 +552,9 @@ export function fillOf(ctx: CanvasRenderingContext2D, paint: Paint | undefined, 
 
 /** The canvas font for a text layer, its own family first and the scene's after it. */
 export function fontOf(layer: Layer, family: string, unit: number, weight = 400): string {
-  const size = Math.round((layer.size ?? 40) * unit);
+  // Kept to a hundredth of a pixel, not a whole one: rounded, words set for a smaller export ran wider than at full size
+  // and broke onto a line the box had no room for.
+  const size = Math.round((layer.size ?? 40) * unit * 100) / 100;
   return `${layer.italic ? "italic " : ""}${layer.weight ?? weight} ${size}px ${layer.font ? `"${layer.font}", ${family}` : family}`;
 }
 
@@ -571,7 +573,9 @@ export function inkOn(color: string): string {
 
 /** The lines a text layer's words fall into at its width, a new line typed counting as one. */
 function textLines(ctx: CanvasRenderingContext2D, text: string, width: number): string[] {
-  return text.split("\n").flatMap((part) => (part.trim() ? wrap(ctx, part, width) : [""]));
+  // A sliver of slack: glyphs measure a little wider or narrower at each size, and a line that just fits in the editor
+  // must still fit in an export drawn at another size.
+  return text.split("\n").flatMap((part) => (part.trim() ? wrap(ctx, part, width * 1.015) : [""]));
 }
 
 /** A line ended with an ellipsis, to say words follow that there is no room for: as much of it as fits `width` with the
