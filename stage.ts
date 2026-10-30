@@ -237,7 +237,7 @@ export interface StageHost {
   /** The words a text layer shows, and a way to change them as they are typed. */
   textOf(layer: Layer): string;
   /** Where a label's words run across its box, in frame fractions, so its outline hugs them; null to outline the box. */
-  wordsSpan?(layer: Layer): { x: number; w: number } | null;
+  wordsSpan?(layer: Layer): { x: number; y: number; w: number; h: number } | null;
   setText(layer: Layer, text: string): void;
   /** The layer being typed into, which the picture leaves out while the box over it shows the words. */
   setEditing(id: string | null): void;
@@ -413,6 +413,13 @@ export function createStage(host: StageHost): Stage {
     return { x: left, y: top, w: right - left, h: bottom - top };
   }
 
+  /** Where a layer is outlined: words where they stand, captions included as the clip plays, not across the whole room
+   *  the design gives them; anything else, its box. */
+  function outlined(layer: Layer): Layer {
+    const span = !layer.rotation && TEXT_KINDS.has(layer.kind) ? host.wordsSpan?.(layer) : null;
+    return span ? { ...layer, ...span } : layer;
+  }
+
   function draw() {
     place();
     const layer = find(selectedId);
@@ -426,10 +433,7 @@ export function createStage(host: StageHost): Stage {
     box.toggleAttribute("data-multi", group.length > 1);
     if (layer && !box.hidden && group.length > 1) frameOf(box, { ...layer, ...bounds(group), rotation: 0 });
     else if (layer && !box.hidden) {
-      // Words are outlined where they run, not across the whole room the design gives them; captions keep their box,
-      // since their words change as the clip plays.
-      const span = !layer.rotation && TEXT_KINDS.has(layer.kind) && layer.kind !== "captions" ? host.wordsSpan?.(layer) : null;
-      frameOf(box, span ? { ...layer, ...span } : layer);
+      frameOf(box, outlined(layer));
       const { width, height } = size();
       box.toggleAttribute("data-words", TEXT_KINDS.has(layer.kind));
       // Pictures keep their shape, so only their corners pull.
@@ -572,7 +576,7 @@ export function createStage(host: StageHost): Stage {
       const { width, height } = size();
       const under = layerAt(host.layers(), point.x, point.y, width, height);
       hover.hidden = !under || under.id === selectedId || under.backdrop === true;
-      if (under && !hover.hidden) frameOf(hover, under);
+      if (under && !hover.hidden) frameOf(hover, outlined(under));
       return;
     }
     const { width, height } = size();

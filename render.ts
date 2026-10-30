@@ -650,23 +650,33 @@ export function textWidth(ctx: CanvasRenderingContext2D, layer: Layer, text: str
 }
 
 /**
- * Where a label's words run across its box, in frame fractions: as the painter lays them out (one line for the
- * single-line kinds, wrapped at the box for the rest, from where they are aligned), so the editor can outline the
- * words rather than the room the design gives them. Null when there are no words.
+ * Where a label's words stand in its box, in frame fractions: as the painter lays them out (one line for the
+ * single-line kinds, wrapped at the box for the rest, from where they are aligned; captions in the middle of theirs, as
+ * many lines as fit), so the editor can outline the words rather than the room the design gives them. Null when there
+ * are no words.
  */
-export function wordsSpan(ctx: CanvasRenderingContext2D, layer: Layer, text: string, family: string, width: number, height: number): { x: number; w: number } | null {
+export function wordsSpan(ctx: CanvasRenderingContext2D, layer: Layer, text: string, family: string, width: number, height: number): { x: number; y: number; w: number; h: number } | null {
   const shown = shownText(layer, text).trim();
   if (!shown) return null;
   const unit = Math.min(width, height) / 1080;
-  typeset(ctx, layer, family, unit, layer.kind === "title" ? 700 : 400);
+  const captions = layer.kind === "captions";
+  typeset(ctx, layer, family, unit, layer.kind === "title" ? 700 : captions ? 650 : 400);
   const room = layer.w * width;
-  const lines = SINGLE_LINE.has(layer.kind) || (layer.kind === "text" && layer.autoWidth) ? shown.split("\n") : textLines(ctx, shown, room);
+  let lines = SINGLE_LINE.has(layer.kind) || (layer.kind === "text" && layer.autoWidth) ? shown.split("\n") : textLines(ctx, captions ? shown.replace(/\s+/g, " ") : shown, room);
+  let y = layer.y;
+  let h = layer.h;
+  if (captions) {
+    const lineHeight = (layer.size ?? 62) * unit * (layer.lineHeight ?? 1.34);
+    lines = lines.slice(0, Math.max(1, Math.floor((layer.h * height) / lineHeight)));
+    h = (lines.length * lineHeight) / height;
+    y = layer.y + (layer.h - h) / 2;
+  }
   // A slanted letter leans out past the width measured for it upright.
   const lean = layer.italic ? (layer.size ?? 40) * unit * 0.2 : 0;
   const widest = Math.min(room, Math.max(0, ...lines.map((line) => ctx.measureText(line).width)) + lean);
-  const align = layer.align ?? "left";
+  const align = layer.align ?? (captions ? "center" : "left");
   const left = align === "center" ? (room - widest) / 2 : align === "right" ? room - widest : 0;
-  return { x: layer.x + left / width, w: widest / width };
+  return { x: layer.x + left / width, y, w: widest / width, h };
 }
 
 const easeOut = (p: number) => 1 - (1 - p) ** 3;
@@ -1884,21 +1894,33 @@ export class Painter {
     ctx.globalAlpha = alpha;
   }
 
-  private paintCaptions(ctx: CanvasRenderingContext2D, area: Box, time: number, layer: Layer, font: string, unit: number) {
-    const { captions, theme } = this.scene;
+  /** The caption shown at `time`, and whether it stands in for one: none when nothing shows. */
+  private cueShown(time: number): { cue: Cue; sample: boolean } | null {
+    const { captions } = this.scene;
     // Between captions, the next one shows a moment before it is said, and the last one stays a moment after.
     let index = cueAt(captions, time);
     if (index < 0) index = captions.findIndex((cue) => cue.start > time && cue.start - time < 1.5);
     if (index < 0) index = captions.findLastIndex((cue) => cue.end <= time && time - cue.end < 0.8);
+    if (index >= 0) return { cue: captions[index], sample: false };
     // While the picture is edited the layer always shows words, so it can be found and styled: the next caption, the
     // last one, or a sample before there are any.
-    let sample = false;
-    let cue: Cue | null = index >= 0 ? captions[index] : null;
-    if (!cue && this.editing) {
-      sample = true;
-      cue = captions.find((item) => item.start > time) ?? captions[captions.length - 1] ?? (this.captionsSample ? { start: time, end: time, text: this.captionsSample } : null);
-    }
-    if (!cue) return;
+    if (!this.editing) return null;
+    const cue = captions.find((item) => item.start > time) ?? captions[captions.length - 1] ?? (this.captionsSample ? { start: time, end: time, text: this.captionsSample } : null);
+    return cue ? { cue, sample: true } : null;
+  }
+
+  /** The words a layer shows at `time` while the picture is edited, samples standing in for words not written yet. */
+  shownWords(layer: Layer, time: number): string {
+    if (layer.kind === "captions") return this.cueShown(time)?.cue.text ?? "";
+    const text = this.textOf(layer, time);
+    return text || (layer.kind === "title" || layer.kind === "name" || layer.kind === "handle" ? this.samples[layer.kind] ?? "" : "");
+  }
+
+  private paintCaptions(ctx: CanvasRenderingContext2D, area: Box, time: number, layer: Layer, font: string, unit: number) {
+    const { theme } = this.scene;
+    const shownCue = this.cueShown(time);
+    if (!shownCue) return;
+    const { cue, sample } = shownCue;
     const words = timeWords(cue);
     const size = Math.round((layer.size ?? 62) * unit);
     const highlight = paintOf(layer.highlight, theme, "accent");

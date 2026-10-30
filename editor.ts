@@ -1708,11 +1708,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       const { width, height } = SIZES[layout];
       // A canvas of its own, made when first needed: the stage can draw before the editor's measuring one exists.
       spanMeasurer ??= element("canvas", "").getContext("2d")!;
-      const span = wordsSpan(spanMeasurer, layer, painter.textOf(layer, clipTime()), options.font ?? "Geist, ui-sans-serif, system-ui, sans-serif", width, height);
+      const span = wordsSpan(spanMeasurer, layer, painter.shownWords(layer, clipTime()), options.font ?? "Geist, ui-sans-serif, system-ui, sans-serif", width, height);
       if (!span) return null;
       // A little room either side, so the outline sits round the words rather than on their first and last letters.
       const pad = ((layer.size ?? 40) * (Math.min(width, height) / 1080) * 0.3) / width;
-      return { x: span.x - pad, w: span.w + pad * 2 };
+      return { ...span, x: span.x - pad, w: span.w + pad * 2 };
     },
     setText(layer, text) {
       if (layer.kind === "title") title = text;

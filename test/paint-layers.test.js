@@ -491,4 +491,10 @@ test("the words of a label take up only part of its box, across from where they 
   const title = wordsSpan(ctx, { ...name, kind: "title", h: 0.2 }, "Shipping in public every week", "Geist", 1080, 1080);
   assert.ok(title.w <= 0.5 + 1e-9 && title.w * 1080 >= 20 * 20, `a wrapped title spans its widest line: ${title.w * 1080}`);
   assert.equal(wordsSpan(ctx, name, "", "Geist", 1080, 1080), null, "no words, no span");
+  // A short caption in a tall box is outlined one line tall, about the box's middle, where the painter sets it.
+  const room = { ...name, kind: "captions", x: 0.1, y: 0.4, w: 0.8, h: 0.3, size: 40, align: undefined };
+  const caption = wordsSpan(ctx, room, "hi there", "Geist", 1080, 1080);
+  assert.ok(Math.abs(caption.h * 1080 - 40 * 1.34) < 1e-6, `one line tall: ${caption.h * 1080}`);
+  assert.ok(Math.abs(caption.y + caption.h / 2 - 0.55) < 1e-9, "about the box's middle");
+  assert.ok(Math.abs(caption.x + caption.w / 2 - 0.5) < 1e-9, "centred, as captions are by default");
 });
