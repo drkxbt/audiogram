@@ -758,6 +758,8 @@ const TABS: Tab[] = ["design", "elements", "text", "photos", "music", "captions"
 const TAB_ICONS: Record<Tab, string> = { design: ICONS.design, elements: ICONS.elements, text: ICONS.text, photos: ICONS.photo, music: ICONS.music, captions: ICONS.captions, layers: ICONS.layers };
 // Uploaded pictures: the kinds every browser draws, up to a size a phone can hold several of. An SVG stays a drawing,
 // painted at whatever size it is shown, once it has been cleaned (svg.ts).
+/** The kinds of words always set on one line, through the middle of their box. */
+const ONE_LINE = new Set<Layer["kind"]>(["name", "handle", "links", "time"]);
 const PICTURE_TYPES = ["image/png", "image/jpeg", "image/webp", "image/gif", "image/avif", SVG_TYPE];
 const PICTURE_LIMIT = 20 * 1024 * 1024;
 // Videos the browser can play in a layer, muted; the clip's sound stays the recording's.
@@ -1886,8 +1888,15 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const family = options.font ?? "Geist, ui-sans-serif, system-ui, sans-serif";
   /** Free text grows and shrinks with its words: down as it wraps, and across too when its box hugs it. A box that
    *  would run past the page's margins stops there and wraps from then on. */
-  // Free text and the title hug their words, so a box never holds empty room below them.
+  // Every box of words hugs them, so none holds empty room above or below. The one-line kinds (name, handle, links,
+  // clock) are drawn through their middle, so they shrink about it; the rest grow down from their top. Captions keep the
+  // room their longest line needs.
   const fitted = (start: Layer): Layer => {
+    if (ONE_LINE.has(start.kind)) {
+      const { width, height } = SIZES[layout];
+      const h = ((start.size ?? 40) * (Math.min(width, height) / 1080) * (start.lineHeight ?? 1.15)) / height;
+      return Math.abs(h - start.h) < 1e-4 ? start : { ...start, h, y: start.y + (start.h - h) / 2 };
+    }
     if (start.kind !== "text" && start.kind !== "title") return start;
     const words = start.kind === "title" ? title.trim() || labels.wordSamples.title : start.text ?? "";
     const { width, height } = SIZES[layout];
