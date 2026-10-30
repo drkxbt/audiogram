@@ -1263,7 +1263,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     input.autocomplete = "off";
     input.addEventListener("input", () => {
       apply(input.value);
-      rebuild();
+      setLayers(layersFor(layout), false);
       changed();
     });
     // A field's edit is one step to undo, ended when it is left.
@@ -1285,11 +1285,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     input.placeholder = labels.linkHints[index] ?? "";
     input.setAttribute("aria-label", labels.link(index + 1));
     input.addEventListener("input", () => {
-      const had = links.some((link) => link.trim());
       links[index] = input.value;
-      // The first link typed into a design with no place for links gets one, at the foot, so it shows; moved or
-      // taken off after that, where it goes is the user's call.
-      if (!had && input.value.trim() && !layersFor(layout).some((layer) => layer.kind === "links" && !layer.hidden)) addElement("links");
+      // A link typed into a design with no place for links gets one, at the foot, so it shows. One hidden from the
+      // Layers list stays hidden: that is the user's call.
+      if (input.value.trim() && !layersFor(layout).some((layer) => layer.kind === "links")) addElement("links");
       else rebuild();
       changed();
     });
@@ -1717,8 +1716,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       if (layer.kind === "title") title = text;
       else if (layer.kind === "name") speaker = text;
       else if (layer.kind === "handle") handle = text;
-      if (layer.kind === "text") setLayers(layersFor(layout).map((item) => (item.id === layer.id ? { ...item, text } : item)), false);
-      else rebuild();
+      setLayers(layersFor(layout).map((item) => (item.id === layer.id && layer.kind === "text" ? { ...item, text } : item)), false);
       titleField.querySelector("input")!.value = title;
       speakerField.querySelector("input")!.value = speaker;
       handleField.querySelector("input")!.value = handle;
@@ -1888,8 +1886,10 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   const family = options.font ?? "Geist, ui-sans-serif, system-ui, sans-serif";
   /** Free text grows and shrinks with its words: down as it wraps, and across too when its box hugs it. A box that
    *  would run past the page's margins stops there and wraps from then on. */
+  // Free text and the title hug their words, so a box never holds empty room below them.
   const fitted = (start: Layer): Layer => {
-    if (start.kind !== "text") return start;
+    if (start.kind !== "text" && start.kind !== "title") return start;
+    const words = start.kind === "title" ? title.trim() || labels.wordSamples.title : start.text ?? "";
     const { width, height } = SIZES[layout];
     let layer = start;
     if (layer.autoWidth) {
@@ -1897,11 +1897,11 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       const least = (0.6 * (layer.size ?? 40) * unit) / width;
       const most = 1 - (2 * Math.round(Math.min(width, height) * 0.074)) / width;
       // A hair to spare, so rounding at a smaller preview never pushes the last letter onto a line of its own.
-      const natural = textWidth(measurer, layer, layer.text ?? "", family, width, height) + 2 / width;
+      const natural = textWidth(measurer, layer, words, family, width, height) + 2 / width;
       layer = widthAnchored(layer, Math.min(most, Math.max(least, natural)), width, height);
       if (natural >= most) layer = { ...layer, x: Math.min(Math.max(layer.x, (1 - most) / 2), 1 - (1 - most) / 2 - layer.w) };
     }
-    const h = Math.max(0.02, textHeight(measurer, layer, layer.text ?? "", family, width, height));
+    const h = Math.max(0.02, textHeight(measurer, layer, words, family, width, height));
     // The box grows down from its own top edge, which for a turned layer isn't straight down the frame.
     const grow = ((h - layer.h) * height) / 2;
     const angle = (layer.rotation * Math.PI) / 180;
@@ -2200,7 +2200,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     renderPageSwatches();
     stage.select(null);
     madeWith = { ...madeWith, [layout]: `host:${choice.id}` };
-    setLayers(made.layers.map((layer) => ({ ...layer })), true);
+    setLayers(keepWritten(made.layers.map((layer) => ({ ...layer }))), true);
     void loadUsedFonts().then(refit);
     bringPhotos();
   }
@@ -2952,9 +2952,13 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     renderPageSwatches();
     stage.select(null);
     madeWith = { ...madeWith, [layout]: id };
-    // Captions already written stay on the picture: a blank page starts without them, but not once there are some.
-    const keepCaptions = cues.length && !chosen.layers.some((layer) => layer.kind === "captions");
-    setLayers(keepCaptions ? [...chosen.layers, { ...defaultLayers(layout).find((layer) => layer.kind === "captions")!, id: layerId("captions") }] : chosen.layers, true);
+    setLayers(keepWritten(chosen.layers), true);
+  }
+
+  /** A design's layers with a place for the captions and links already written: one without gets the classic one. */
+  function keepWritten(layers: Layer[]): Layer[] {
+    const written = (["captions", "links"] as const).filter((kind) => (kind === "captions" ? cues.length > 0 : links.some((link) => link.trim())) && !layers.some((layer) => layer.kind === kind));
+    return [...layers, ...written.map((kind) => ({ ...defaultLayers(layout).find((layer) => layer.kind === kind)!, id: layerId(kind) }))];
   }
 
   function markTheme() {

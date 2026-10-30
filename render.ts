@@ -631,7 +631,8 @@ function typeset(ctx: CanvasRenderingContext2D, layer: Layer, family: string, un
 /** How tall a text layer's words stand, as a share of the frame's height, at the frame's size. */
 export function textHeight(ctx: CanvasRenderingContext2D, layer: Layer, text: string, family: string, width: number, height: number): number {
   const unit = Math.min(width, height) / 1080;
-  typeset(ctx, layer, family, unit);
+  // Measured in the weight the painter sets them in, so a bold title wraps here where it wraps on the picture.
+  typeset(ctx, layer, family, unit, layer.kind === "title" ? 700 : 400);
   const shown = shownText(layer, text);
   // Words in a box that hugs them only break where a line was typed.
   const count = layer.autoWidth ? shown.split("\n").length : textLines(ctx, shown, layer.w * width).length;

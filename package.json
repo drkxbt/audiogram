@@ -1,6 +1,6 @@
 {
   "name": "@drkxbt/audiogram",
-  "version": "0.15.1",
+  "version": "0.15.2",
   "description": "Turn a Spaces or podcast recording into a captioned video clip for X, TikTok, Reels, Shorts or LinkedIn, in the browser: pick the moment, time the captions, choose a look, and export an MP4. No upload, no watermark, no dependencies.",
   "license": "MIT",
   "author": "drk",
