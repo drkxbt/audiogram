@@ -174,6 +174,8 @@ export interface Labels {
   zoomLevel: (percent: number) => string;
   layerNames: Record<Exclude<LayerKind, "text">, string>;
   textLayer: (words: string) => string;
+  /** A title, name or handle layer with its words, as "Title: Small Bets". */
+  wordsLayer: (name: string, words: string) => string;
   showLayer: (name: string) => string;
   hideLayer: (name: string) => string;
   selectLayer: (name: string) => string;
@@ -727,6 +729,7 @@ const DEFAULT_LABELS: Labels = {
   layersHelp: "Top of the picture first. Press a name to select it; hidden parts can be shown again here.",
   layerNames: { avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", visual: "Sound", time: "Clip time", captions: "Captions", links: "Links", image: "Picture", video: "Video", shape: "Shape", graphic: "Graphic", chart: "Chart", table: "Table", mockup: "Mockup", solid: "3D shape", ambient: "Moving background" },
   textLayer: (words) => `Text: ${words}`,
+  wordsLayer: (name, words) => `${name}: ${words}`,
   showLayer: (name) => `Show ${name}`,
   hideLayer: (name) => `Hide ${name}`,
   selectLayer: (name) => `Select ${name}`,
@@ -1901,9 +1904,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }
   /** A layer's name for people. */
   function layerName(layer: Layer): string {
-    if (layer.kind === "text") return labels.textLayer((layer.text ?? "").split(/\s+/).slice(0, 4).join(" ") || "…");
+    const short = (words: string) => words.split(/\s+/).slice(0, 4).join(" ");
+    if (layer.kind === "text") return labels.textLayer(short(layer.text ?? "") || "…");
     if (layer.kind === "visual") return labels.elementNames[layer.visual ?? visual];
-    return labels.layerNames[layer.kind];
+    // The show's title, the speaker and the handle are the layers people rename most, so their words go in the name.
+    const words = (layer.kind === "title" ? title : layer.kind === "name" ? speaker : layer.kind === "handle" ? handle : "").trim();
+    return words ? labels.wordsLayer(labels.layerNames[layer.kind], short(words)) : labels.layerNames[layer.kind];
   }
 
   function renderLayers() {
