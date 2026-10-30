@@ -152,7 +152,6 @@ export interface Labels {
   videoFile: string;
   pictureFile: string;
   quality: string;
-  frameRate: string;
   downloadNow: string;
   soundAndCaptions: string;
   /** The clip's own parts, each sound style among them, as Elements and the layers list name them. */
@@ -299,6 +298,13 @@ export interface EditorOptions {
   labels?: Partial<Labels>;
   /** Called with the finished video. Without it, the video downloads. */
   onExport?: (result: ExportResult) => void;
+  /** The sizes offered under Download; two thirds of the shape's short side and all of it when left out. */
+  qualities?: Quality[];
+  /**
+   * Called when Download is pressed, before anything is made, with what was chosen; resolve false to make nothing. A
+   * page can show an ad here before a premium size.
+   */
+  beforeDownload?: (choice: { kind: "video" | "picture"; quality: Quality }) => Promise<boolean> | boolean;
   /** Drawn over every frame of the preview and the export. */
   overlay?: Overlay;
   /** Stretches of the recording, [start, end] in seconds, played one after another as the clip. */
@@ -315,6 +321,18 @@ export interface EditorOptions {
   images?: Record<string, Blob | string>;
   /** Fonts to offer, each loaded only when used. */
   fonts?: FontChoice[];
+}
+
+/** A size offered under Download. */
+export interface Quality {
+  /** The picture's short side in pixels, as in 1080p. */
+  short: number;
+  /** Marked with a gold crown: a size that asks something of the person first. */
+  premium?: boolean;
+  /** A few words under it, such as "Ad · 30 s". */
+  note?: string;
+  /** Made without the overlay. */
+  clean?: boolean;
 }
 
 /** The look of the clip as it stands: what a page would keep to start the next clip the same way. */
@@ -376,8 +394,10 @@ export interface Editor {
   setOverlay(overlay: Overlay | null): void;
   /** Opens one of the tools, as pressing its tab does. */
   selectTab(tab: Tab): void;
-  /** Places for a page's own controls: in the header after Open audio, in the header before Download, and at the top of the Captions tab. */
-  readonly slots: { header: HTMLElement; actions: HTMLElement; captions: HTMLElement };
+  /** Places for a page's own controls: in the header after Open audio, in the header before Download, at the top of the Captions tab, and in the Music tab under the track. */
+  readonly slots: { header: HTMLElement; actions: HTMLElement; captions: HTMLElement; music: HTMLElement };
+  /** Puts a track under the clip, as choosing a file in the Music tab does; null takes it off. */
+  setMusic(music: Blob | string | null): Promise<void>;
   /** Fonts to offer, for a page that loads its list after the editor opens. */
   setFonts(fonts: FontChoice[]): void;
   /** Uploaded pictures by key, for a page that keeps them somewhere slower to read than the options. */
@@ -708,7 +728,6 @@ const DEFAULT_LABELS: Labels = {
   videoFile: "Video (MP4)",
   pictureFile: "Picture of this moment (PNG)",
   quality: "Quality",
-  frameRate: "Frames a second",
   downloadNow: "Download",
   soundAndCaptions: "Sound and captions",
   elementNames: { captions: "Captions", bars: "Sound bars", wave: "Sound wave", pulse: "Pulse", ring: "Sound ring", radial: "Radial bars", mirror: "Mirrored bars", line: "Sound line", dots: "Sound dots", blocks: "Level meter", scope: "Scope", time: "Clip time", avatar: "Profile picture", name: "Name", handle: "Handle", title: "Title", links: "Links" },
@@ -1033,7 +1052,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   download.setAttribute("role", "dialog");
   download.setAttribute("aria-label", labels.downloadPanel);
   download.hidden = true;
-  let downloadChoice: { kind: "video" | "picture"; scale: number; fps: number } = { kind: "video", scale: 1, fps: 30 };
+  let downloadChoice: { kind: "video" | "picture"; quality: number | null } = { kind: "video", quality: null };
   header.append(download);
 
   const body = element("div", "ag-body");
@@ -1441,7 +1460,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   musicSlider.value = String(Math.round(musicVolume * 100));
   musicLevel.append(musicLevelName, musicSlider);
   musicLevel.hidden = true;
-  panes.music.append(musicLevel);
+  // A page's own tracks go under the one in use.
+  const musicSlot = element("div", "ag-slot ag-slot-block");
+  panes.music.append(musicLevel, musicSlot);
   musicSlider.addEventListener("input", () => {
     musicVolume = Number(musicSlider.value) / 100;
     musicAudio.volume = musicVolume;
@@ -2120,6 +2141,9 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       tile.setAttribute("aria-label", labels.useTemplate(choice.name));
       const canvas = element("canvas", "ag-template-picture");
       canvas.setAttribute("aria-hidden", "true");
+      // Sized for the shape now, before its picture is drawn: a canvas starts 300 by 150, and tiles that grew as they
+      // scrolled into view pushed the one under the pointer away, so a press landed on the design above it.
+      Object.assign(canvas, thumbSize());
       const name = element("span", "ag-template-name");
       name.textContent = choice.name;
       tile.append(canvas, name);
@@ -2142,12 +2166,16 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     }
   }, { root: drawer });
 
-  function drawTemplate(canvas: HTMLCanvasElement, choice: TemplateChoice) {
-    const made = choice.make(layout);
+  /** A design tile's picture size for the shape: 240 px on its long side. */
+  function thumbSize() {
     const { width, height } = SIZES[layout];
     const scale = 240 / Math.max(width, height);
-    canvas.width = Math.round(width * scale);
-    canvas.height = Math.round(height * scale);
+    return { width: Math.round(width * scale), height: Math.round(height * scale) };
+  }
+
+  function drawTemplate(canvas: HTMLCanvasElement, choice: TemplateChoice) {
+    const made = choice.make(layout);
+    Object.assign(canvas, thumbSize());
     const thumbs = photoThumbs(made.layers, () => paint());
     const paint = () => {
       // A thumbnail shows the template as it comes, without the user's background or other pictures.
@@ -3704,7 +3732,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
 
   // Exporting.
 
-  async function exportVideo(choice: { fps?: number; scale?: number } = {}): Promise<ExportResult | null> {
+  async function exportVideo(choice: { fps?: number; scale?: number; clean?: boolean } = {}): Promise<ExportResult | null> {
     if (!recordings.length || exporting || adding) return null;
     stop();
     exporting = true;
@@ -3714,7 +3742,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     placeTimeline();
     try {
       await loadUsedFonts();
-      const result = await exportClip(scene(), {
+      const made = scene();
+      const result = await exportClip(choice.clean ? { ...made, overlay: undefined } : made, {
         prepare: videosAt,
         fps: choice.fps,
         scale: choice.scale,
@@ -4026,6 +4055,48 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   // Buttons and keys.
 
   playButton.addEventListener("click", () => (animating ? stop() : play()));
+  const shortSide = () => Math.min(SIZES[layout].width, SIZES[layout].height);
+  const qualities = (): Quality[] => (options.qualities?.length ? options.qualities : [{ short: Math.round(shortSide() * (2 / 3)) }, { short: shortSide() }]);
+  /** The size picked, or at first the biggest one that asks nothing. */
+  function chosenQuality(): number {
+    const offered = qualities();
+    if (downloadChoice.quality !== null && downloadChoice.quality < offered.length) return downloadChoice.quality;
+    const free = offered.flatMap((quality, index) => (quality.premium ? [] : [index]));
+    return free.length ? free[free.length - 1] : offered.length - 1;
+  }
+  /** The sizes as keys of two lines: the size, with a gold crown on a premium one, and its note. */
+  function qualityGroup(offered: Quality[], picked: number) {
+    const box = element("div", "ag-field");
+    const title = element("span", "ag-field-name");
+    title.textContent = labels.quality;
+    const row = element("div", "ag-qualities");
+    row.setAttribute("role", "radiogroup");
+    row.setAttribute("aria-label", labels.quality);
+    offered.forEach((quality, index) => {
+      const chip = element("button", "ag-key ag-quality");
+      chip.type = "button";
+      chip.setAttribute("role", "radio");
+      chip.setAttribute("aria-checked", String(index === picked));
+      if (quality.premium) chip.dataset.premium = "";
+      const size = element("span", "ag-quality-size");
+      if (quality.premium) size.append(icon(ICONS.crown));
+      size.append(`${quality.short}p`);
+      chip.append(size);
+      if (quality.note) {
+        const note = element("span", "ag-quality-note");
+        note.textContent = quality.note;
+        chip.append(note);
+      }
+      chip.addEventListener("click", () => {
+        downloadChoice = { ...downloadChoice, quality: index };
+        renderDownload();
+        download.querySelector<HTMLElement>(".ag-qualities [aria-checked=true]")?.focus();
+      });
+      row.append(chip);
+    });
+    box.append(title, row);
+    return box;
+  }
   function renderDownload() {
     const group = (name: string, choices: Array<[string, boolean, () => void]>) => {
       const box = element("div", "ag-field");
@@ -4054,16 +4125,19 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       [labels.videoFile, downloadChoice.kind === "video", () => (downloadChoice = { ...downloadChoice, kind: "video" })],
       [labels.pictureFile, downloadChoice.kind === "picture", () => (downloadChoice = { ...downloadChoice, kind: "picture" })],
     ])];
-    const { width, height } = SIZES[layout];
-    const short = Math.min(width, height);
-    parts.push(group(labels.quality, [[`${Math.round(short * (2 / 3))}p`, downloadChoice.scale < 1, () => (downloadChoice = { ...downloadChoice, scale: 2 / 3 })], [`${short}p`, downloadChoice.scale === 1, () => (downloadChoice = { ...downloadChoice, scale: 1 })]]));
-    if (downloadChoice.kind === "video") parts.push(group(labels.frameRate, [24, 30, 60].map((fps) => [String(fps), downloadChoice.fps === fps, () => (downloadChoice = { ...downloadChoice, fps })])));
+    const offered = qualities();
+    const picked = chosenQuality();
+    parts.push(qualityGroup(offered, picked));
     const go = keyButton("ag-download-go", labels.downloadNow, ICONS.export);
-    go.addEventListener("click", () => {
+    go.addEventListener("click", async () => {
+      const kind = downloadChoice.kind;
+      const quality = offered[picked];
       closeDownload();
       exportButton.focus();
-      if (downloadChoice.kind === "picture") void downloadFrame(downloadChoice.scale).catch(() => tell(labels.failed));
-      else void exportVideo({ fps: downloadChoice.fps, scale: downloadChoice.scale }).catch(() => {});
+      if (options.beforeDownload && !(await options.beforeDownload({ kind, quality }))) return;
+      const scale = quality.short / shortSide();
+      if (kind === "picture") void downloadFrame(scale, quality.clean).catch(() => tell(labels.failed));
+      else void exportVideo({ scale, clean: quality.clean }).catch(() => {});
     });
     download.replaceChildren(...parts, go);
   }
@@ -4135,7 +4209,7 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
   }, { signal: gone.signal });
 
   /** The picture at the playhead as a PNG, the way the video shows it at that moment. */
-  async function downloadFrame(scale: number) {
+  async function downloadFrame(scale: number, clean = false) {
     await loadUsedFonts();
     const time = clipTime();
     await videosAt(time, false);
@@ -4143,7 +4217,8 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
     const canvas = element("canvas", "");
     canvas.width = Math.round(width * scale);
     canvas.height = Math.round(height * scale);
-    new Painter(scene()).paint(canvas.getContext("2d", { alpha: false })!, time);
+    const made = scene();
+    new Painter(clean ? { ...made, overlay: undefined } : made).paint(canvas.getContext("2d", { alpha: false })!, time);
     syncVideos(time, false);
     const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
     if (!blob) throw new Error("The picture could not be made");
@@ -4450,7 +4525,12 @@ export function audiogram(container: HTMLElement, options: EditorOptions = {}): 
       rebuild();
     },
     selectTab,
-    slots: { header: headerSlot, actions: actionsSlot, captions: captionsSlot },
+    slots: { header: headerSlot, actions: actionsSlot, captions: captionsSlot, music: musicSlot },
+    async setMusic(next) {
+      await setMusic(next);
+      musicRow.show(next);
+      changed();
+    },
     setFonts(next) {
       fontList = next;
       void loadUsedFonts().then(refit);

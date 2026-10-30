@@ -15,4 +15,4 @@ export { drawingLayer, elementTiles, matchDrawings, searchTiles, SECTIONS, type 
 export { TEMPLATES, templateOf, type Template, type TemplateId } from "./templates.js";
 export { createStage, type FontChoice, type Stage, type StageHost, type StageLabels } from "./stage.js";
 export { canExportMp4, exportClip, type ExportOptions, type ExportResult } from "./export.js";
-export { audiogram, type Editor, type EditorOptions, type Labels, type Drawing, type DrawingSet, type Library, type MediaFeed, type MediaItem, type MediaKind, type MediaPage, type Settings, type StockPhoto, type Tab, type TemplateChoice } from "./editor.js";
+export { audiogram, type Editor, type EditorOptions, type Labels, type Quality, type Drawing, type DrawingSet, type Library, type MediaFeed, type MediaItem, type MediaKind, type MediaPage, type Settings, type StockPhoto, type Tab, type TemplateChoice } from "./editor.js";

@@ -286,6 +286,15 @@
 }
 .ag-download .ag-field { display: grid; gap: 6px; }
 .ag-download .ag-chips { max-width: none; }
+/* Sizes as keys of two lines, two to a row: the size, then what it takes. A premium size wears a gold crown. */
+.ag-qualities { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
+.ag-quality { display: grid; align-content: center; justify-items: start; gap: 2px; height: auto; min-height: 48px; padding: 7px 10px; text-align: left; }
+.ag-quality-size { display: inline-flex; align-items: center; gap: 5px; font-size: 13.5px; font-weight: 650; font-variant-numeric: tabular-nums; }
+.ag-quality-size svg { width: 15px; height: 15px; color: #f2b632; }
+.ag-quality-note { color: var(--ag-muted); font-size: 11.5px; line-height: 1.3; }
+.ag-qualities .ag-quality[aria-checked="true"] { background: var(--ag-accent); color: var(--ag-accent-ink); }
+.ag-qualities .ag-quality[aria-checked="true"] .ag-quality-note { color: inherit; opacity: 0.75; }
+.ag-qualities .ag-quality[aria-checked="true"] .ag-quality-size svg { color: #8a5a00; }
 .ag-download-go { justify-content: center; height: 38px; background: var(--ag-accent); color: var(--ag-accent-ink); font-weight: 600; }
 /* Start over asks first: what goes, what stays, and two keys, the one that clears in a warning colour. */
 .ag-confirm { width: min(340px, calc(100% - 24px)); }

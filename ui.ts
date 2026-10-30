@@ -46,6 +46,7 @@ export const ICONS = {
   play: '<path class="fill" d="M8 5.5v13l10.5-6.5Z"/>',
   pause: '<rect class="fill" x="6.5" y="5" width="4" height="14" rx="1"/><rect class="fill" x="13.5" y="5" width="4" height="14" rx="1"/>',
   export: '<path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 19h14"/>',
+  crown: '<path class="fill" d="M4 8.5 8.2 12 12 5.5 15.8 12 20 8.5 18.4 18H5.6Z"/>',
   square: '<rect x="5" y="5" width="14" height="14" rx="1.5"/>',
   portrait: '<rect x="6" y="4" width="12" height="15" rx="1.5"/>',
   story: '<rect x="7.5" y="3" width="9" height="18" rx="1.5"/>',
